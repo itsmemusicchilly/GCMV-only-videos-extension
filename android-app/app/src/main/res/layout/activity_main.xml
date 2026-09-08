@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F0F14">
+
+    <!-- Top App Header Bar -->
+    <LinearLayout
+        android:id="@+id/top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_alignParentTop="true"
+        android:background="#16122A"
+        android:elevation="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="10dp">
+
+        <!-- Logo & Title -->
+        <TextView
+            android:id="@+id/app_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="🌸 Gacha MV"
+            android:textColor="#FF2E93"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <!-- Jukebox Streams Button -->
+        <Button
+            android:id="@+id/btn_jukebox"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp"
+            android:text="🎵 Jukebox"
+            android:textAllCaps="false"
+            android:textColor="#00E5FF"
+            android:textSize="11sp" />
+
+        <!-- Skips & Highlights Button -->
+        <Button
+            android:id="@+id/btn_skips"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp"
+            android:text="⏭️ Skips"
+            android:textAllCaps="false"
+            android:textColor="#FFD700"
+            android:textSize="11sp" />
+
+        <!-- Settings Button -->
+        <Button
+            android:id="@+id/btn_settings"
+            style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginStart="2dp"
+            android:backgroundTint="#FF2E93"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:text="⚙️ Settings"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            app:cornerRadius="16dp" />
+
+        <!-- Reload Button -->
+        <ImageButton
+            android:id="@+id/btn_reload"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Reload"
+            android:src="@android:drawable/ic_menu_rotate"
+            app:tint="#A0A0B0" />
+
+    </LinearLayout>
+
+    <!-- Loading Progress Bar -->
+    <ProgressBar
+        android:id="@+id/progress_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_below="@id/top_bar"
+        android:indeterminate="false"
+        android:max="100"
+        android:progressDrawable="@android:drawable/progress_horizontal"
+        android:visibility="gone" />
+
+    <!-- Primary YouTube WebView with Extension injected -->
+    <WebView
+        android:id="@+id/web_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/top_bar"
+        android:background="#0F0F14" />
+
+    <!-- Fullscreen Video Container (Shown during HTML5 Fullscreen playback) -->
+    <FrameLayout
+        android:id="@+id/custom_view_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone" />
+
+    <!-- Floating Action Button for Quick Settings / Jukebox Access -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fab_settings"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="24dp"
+        android:contentDescription="Gacha Settings"
+        android:src="@mipmap/ic_launcher_round"
+        app:backgroundTint="#FF2E93"
+        app:fabSize="mini"
+        app:tint="@null" />
+
+</RelativeLayout>

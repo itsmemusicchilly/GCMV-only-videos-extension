@@ -1,0 +1,23 @@
+{
+  "name": "gacha-mv-player-youtube",
+  "version": "1.0.1",
+  "description": "Gacha MV Player - YouTube Extension & Standalone Android APK",
+  "scripts": {
+    "build:apk": "./build-apk.sh",
+    "build:extension": "cd extension && bash package.sh",
+    "build:all": "npm run build:extension && npm run build:apk",
+    "start:nas": "./start-nas-server.sh"
+  },
+  "keywords": [
+    "gacha",
+    "gcmv",
+    "glmv",
+    "glmv2",
+    "youtube",
+    "android",
+    "apk",
+    "extension"
+  ],
+  "author": "itsmemusicchilly",
+  "license": "MIT"
+}

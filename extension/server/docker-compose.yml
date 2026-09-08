@@ -1,0 +1,16 @@
+services:
+  gacha-nas-db:
+    build: .
+    container_name: gacha-nas-db
+    restart: unless-stopped
+    ports:
+      - "3080:3000"
+    volumes:
+      - ./data:/app/data
+      - ./server.js:/app/server.js:ro
+    environment:
+      - PORT=3000
+      - BIND_HOST=0.0.0.0
+      - DATA_DIR=/app/data
+      - NAS_AUTH_TOKEN=${NAS_AUTH_TOKEN:?Set NAS_AUTH_TOKEN in server/.env}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}

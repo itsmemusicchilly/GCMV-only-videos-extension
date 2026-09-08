@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#16122A"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Drag Handle -->
+        <View
+            android:layout_width="40dp"
+            android:layout_height="4dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="12dp"
+            android:background="#3A305E" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="🎵 Instant Gacha Jukebox"
+            android:textColor="#00E5FF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <!-- 1-Click Instant Radio Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_native_instant_radio"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginBottom="14dp"
+            android:backgroundTint="#FF2E93"
+            android:text="✨ Play Instant Gacha Radio"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            app:cornerRadius="25dp" />
+
+        <!-- Search Song as GCMV Input -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginBottom="16dp"
+            android:background="#211A3E"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="10dp">
+
+            <EditText
+                android:id="@+id/et_search_gacha"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@null"
+                android:hint="Search any song (Dynasty, Monster)..."
+                android:textColor="#FFFFFF"
+                android:textColorHint="#7E789B"
+                android:textSize="13sp"
+                android:imeOptions="actionSearch"
+                android:inputType="text" />
+
+            <Button
+                android:id="@+id/btn_search_gacha_go"
+                style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:backgroundTint="#FF2E93"
+                android:minWidth="0dp"
+                android:paddingHorizontal="12dp"
+                android:text="Go"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                app:cornerRadius="16dp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="10dp"
+            android:text="🌟 Curated Gacha Streams"
+            android:textColor="#A09BB8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <!-- Quick Stream Category Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_gcmv"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="🌸 GCMV - Gacha Club Music Videos"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_glmv"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="✨ GLMV - Classic Gacha Life Hits"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_glmv2"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="🌟 GLMV2 - Gacha Life 2 New Releases"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_lyrics"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="🎀 Gacha Lyric Videos"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_emotional"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="🎭 Story &amp; Emotional Drama MVs"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cat_upbeat"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:gravity="start|center_vertical"
+                android:text="⚡ Upbeat Pop &amp; Nightcore GCMV"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                app:strokeColor="#3A305E" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

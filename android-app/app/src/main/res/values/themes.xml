@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GachaMVPlayer" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#FF2E93</item>
+        <item name="colorPrimaryDark">#0F0F14</item>
+        <item name="colorSecondary">#FF2E93</item>
+        <item name="colorAccent">#FF2E93</item>
+        <item name="colorControlActivated">#FF2E93</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:statusBarColor">#0F0F14</item>
+        <item name="android:navigationBarColor">#0F0F14</item>
+    </style>
+</resources>
