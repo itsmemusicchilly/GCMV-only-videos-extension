@@ -46,6 +46,13 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+import org.json.JSONObject;
+import org.json.JSONTokener;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -318,9 +325,7 @@ public class MainActivity extends AppCompatActivity {
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                 public void onTextChanged(CharSequence s, int start, int count, int after) {}
                 public void afterTextChanged(android.text.Editable s) {
-                    String u = s.toString().trim();
-                    sp.edit().putString("nasServerUrl", u).apply();
-                    syncSettingToWebView("nasServerUrl", u);
+                    persistNasCredentials(sp, s.toString(), etNasToken != null ? etNasToken.getText().toString() : sp.getString("nasAuthToken", ""));
                 }
             });
         }
@@ -330,12 +335,16 @@ public class MainActivity extends AppCompatActivity {
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                 public void onTextChanged(CharSequence s, int start, int count, int after) {}
                 public void afterTextChanged(android.text.Editable s) {
-                    String t = s.toString().trim();
-                    sp.edit().putString("nasAuthToken", t).apply();
-                    syncSettingToWebView("nasAuthToken", t);
+                    persistNasCredentials(sp, etNasUrl != null ? etNasUrl.getText().toString() : sp.getString("nasServerUrl", ""), s.toString());
                 }
             });
         }
+
+        settingsDialog.setOnDismissListener(dialog -> persistNasCredentials(
+            sp,
+            etNasUrl != null ? etNasUrl.getText().toString() : "",
+            etNasToken != null ? etNasToken.getText().toString() : ""
+        ));
 
         if (btnNasTest != null) {
             btnNasTest.setOnClickListener(v -> testNasConnection(etNasUrl, etNasToken, tvNasStatus));
@@ -502,18 +511,42 @@ public class MainActivity extends AppCompatActivity {
         void onChanged(boolean value);
     }
 
+    private void persistNasCredentials(android.content.SharedPreferences sp, String rawUrl, String rawToken) {
+        String url = rawUrl != null ? rawUrl.trim() : "";
+        String token = rawToken != null ? rawToken.trim() : "";
+        sp.edit()
+            .putString("nasServerUrl", url)
+            .putString("nasAuthToken", token)
+            .apply();
+        syncSettingToWebView("nasServerUrl", url);
+        syncSettingToWebView("nasAuthToken", token);
+    }
+
+    private static final Set<String> BOOLEAN_PREF_KEYS = new HashSet<>(Arrays.asList(
+            "enabled", "showJukebox", "showSearchChips", "blockAds", "autoSkipNonGacha",
+            "autoplayGuard", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
+            "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
+            "useNasServer", "nasAutoSync"
+    ));
+
     private void syncSettingToWebView(String key, Object value) {
         if (webView == null) return;
-        String valStr = value instanceof String ? "'" + value + "'" : String.valueOf(value);
-        String js = String.format(
+        String valStr;
+        if (value instanceof String) {
+            valStr = JSONObject.quote((String) value);
+        } else if (value instanceof Boolean || value instanceof Number) {
+            valStr = String.valueOf(value);
+        } else {
+            valStr = JSONObject.quote(String.valueOf(value));
+        }
+        String js =
             "(function() {\n" +
-            "  var obj = {}; obj['%s'] = %s;\n" +
+            "  var obj = {}; obj[" + JSONObject.quote(key) + "] = " + valStr + ";\n" +
             "  if (window.chrome && window.chrome.storage && window.chrome.storage.local) {\n" +
             "    window.chrome.storage.local.set(obj);\n" +
             "  }\n" +
             "  if (window.__gachaMvReinit) window.__gachaMvReinit();\n" +
-            "})();", key, valStr
-        );
+            "})();";
         webView.evaluateJavascript(js, null);
     }
 
@@ -704,24 +737,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onHideCustomView() {
-                if (customView == null) return;
-
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
-                exitImmersiveMode();
-
-                customViewContainer.removeView(customView);
-                customViewContainer.setVisibility(View.GONE);
-
-                webView.setVisibility(View.VISIBLE);
-                if (topBar != null) topBar.setVisibility(View.VISIBLE);
-                if (fabSettings != null) fabSettings.setVisibility(View.VISIBLE);
-
-                if (customViewCallback != null) {
-                    customViewCallback.onCustomViewHidden();
-                }
-
-                customView = null;
-                customViewCallback = null;
+                closeFullscreenCustomView();
             }
         });
 
@@ -755,6 +771,27 @@ public class MainActivity extends AppCompatActivity {
                 scheduleDelayedInjections(view);
             }
         });
+    }
+
+    private void closeFullscreenCustomView() {
+        if (customView == null) return;
+
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        exitImmersiveMode();
+
+        customViewContainer.removeView(customView);
+        customViewContainer.setVisibility(View.GONE);
+
+        webView.setVisibility(View.VISIBLE);
+        if (topBar != null) topBar.setVisibility(View.VISIBLE);
+        if (fabSettings != null) fabSettings.setVisibility(View.VISIBLE);
+
+        if (customViewCallback != null) {
+            customViewCallback.onCustomViewHidden();
+        }
+
+        customView = null;
+        customViewCallback = null;
     }
 
     private void injectBackgroundShim(WebView view) {
@@ -797,7 +834,7 @@ public class MainActivity extends AppCompatActivity {
                 "    var style = document.createElement('style');\n" +
                 "    style.id = id;\n" +
                 "    style.type = 'text/css';\n" +
-                "    style.innerHTML = atob('" + encodedCss + "');\n" +
+                "    style.textContent = atob('" + encodedCss + "');\n" +
                 "    (document.head || document.documentElement).appendChild(style);\n" +
                 "  }\n" +
                 "})();";
@@ -850,9 +887,7 @@ public class MainActivity extends AppCompatActivity {
                     settingsDialog.dismiss();
                 } else if (customView != null) {
                     // Exit fullscreen video
-                    if (webView != null && webView.getWebChromeClient() != null) {
-                        webView.getWebChromeClient().onHideCustomView();
-                    }
+                    closeFullscreenCustomView();
                 } else if (webView != null && webView.canGoBack()) {
                     webView.goBack();
                 } else {
@@ -965,6 +1000,69 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void onTabMessage(String msgJson) {
             Log.d(TAG, "Bridge received tab message: " + msgJson);
+        }
+
+        @JavascriptInterface
+        public String getAllPrefs() {
+            JSONObject obj = new JSONObject();
+            try {
+                Map<String, ?> all = getSharedPreferences("gacha_prefs", MODE_PRIVATE).getAll();
+                for (Map.Entry<String, ?> entry : all.entrySet()) {
+                    Object value = entry.getValue();
+                    if (value instanceof Boolean || value instanceof Integer || value instanceof Long || value instanceof Double) {
+                        obj.put(entry.getKey(), value);
+                    } else if (value instanceof Float) {
+                        obj.put(entry.getKey(), ((Float) value).doubleValue());
+                    } else if (value instanceof String) {
+                        String raw = (String) value;
+                        if ("nasServerUrl".equals(entry.getKey()) || "nasAuthToken".equals(entry.getKey())) {
+                            obj.put(entry.getKey(), raw);
+                        } else {
+                            try {
+                                obj.put(entry.getKey(), new JSONTokener(raw).nextValue());
+                            } catch (Exception parseErr) {
+                                obj.put(entry.getKey(), raw);
+                            }
+                        }
+                    } else if (value != null) {
+                        obj.put(entry.getKey(), value.toString());
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "getAllPrefs failed", e);
+            }
+            return obj.toString();
+        }
+
+        @JavascriptInterface
+        public void savePref(String key, String jsonValue) {
+            if (key == null || key.isEmpty()) return;
+            android.content.SharedPreferences.Editor editor = getSharedPreferences("gacha_prefs", MODE_PRIVATE).edit();
+            if (jsonValue == null || "null".equals(jsonValue)) {
+                editor.remove(key).apply();
+                return;
+            }
+
+            try {
+                Object parsed = new JSONTokener(jsonValue).nextValue();
+                if (BOOLEAN_PREF_KEYS.contains(key) && parsed instanceof Boolean) {
+                    editor.putBoolean(key, (Boolean) parsed);
+                } else if ("volumeBoost".equals(key) && parsed instanceof Number) {
+                    editor.putFloat(key, ((Number) parsed).floatValue());
+                } else if (parsed instanceof String) {
+                    editor.putString(key, (String) parsed);
+                } else if (parsed instanceof Boolean) {
+                    editor.putBoolean(key, (Boolean) parsed);
+                } else if (parsed instanceof Number && "volumeBoost".equals(key)) {
+                    editor.putFloat(key, ((Number) parsed).floatValue());
+                } else {
+                    editor.putString(key, jsonValue);
+                }
+                editor.apply();
+            } catch (Exception e) {
+                editor.putString(key, jsonValue).apply();
+                Log.e(TAG, "savePref failed for " + key, e);
+            }
         }
     }
 }

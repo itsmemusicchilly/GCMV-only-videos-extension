@@ -283,17 +283,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  function persistNasFields() {
+    const url = popupNasUrlInput ? popupNasUrlInput.value.trim() : "";
+    const token = popupNasTokenInput ? popupNasTokenInput.value.trim() : "";
+    return chrome.storage.local.set({ nasServerUrl: url, nasAuthToken: token });
+  }
+
   if (popupNasUrlInput) {
-    popupNasUrlInput.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ nasServerUrl: e.target.value.trim() });
-    });
+    popupNasUrlInput.addEventListener("input", persistNasFields);
+    popupNasUrlInput.addEventListener("change", persistNasFields);
+    popupNasUrlInput.addEventListener("blur", persistNasFields);
   }
 
   if (popupNasTokenInput) {
-    popupNasTokenInput.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ nasAuthToken: e.target.value.trim() });
-    });
+    popupNasTokenInput.addEventListener("input", persistNasFields);
+    popupNasTokenInput.addEventListener("change", persistNasFields);
+    popupNasTokenInput.addEventListener("blur", persistNasFields);
   }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") persistNasFields();
+  });
+  window.addEventListener("pagehide", persistNasFields);
 
   if (togglePopupNasAutoSync) {
     togglePopupNasAutoSync.addEventListener("change", async (e) => {

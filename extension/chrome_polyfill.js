@@ -10,6 +10,34 @@
   const STORAGE_PREFIX = "gcmv_ext_";
   const listeners = [];
 
+  function hydrateFromNativePrefs() {
+    if (!(window.AndroidBridge && typeof window.AndroidBridge.getAllPrefs === "function")) {
+      return;
+    }
+    try {
+      const native = JSON.parse(window.AndroidBridge.getAllPrefs() || "{}");
+      if (!native || typeof native !== "object") return;
+      for (const [k, v] of Object.entries(native)) {
+        localStorage.setItem(STORAGE_PREFIX + k, JSON.stringify(v));
+      }
+    } catch (e) {
+      console.warn("[GCMV Polyfill] Native hydrate failed:", e);
+    }
+  }
+
+  function persistToNativePrefs(key, value) {
+    if (!(window.AndroidBridge && typeof window.AndroidBridge.savePref === "function")) {
+      return;
+    }
+    try {
+      window.AndroidBridge.savePref(key, JSON.stringify(value));
+    } catch (e) {
+      console.warn("[GCMV Polyfill] Native persist failed:", e);
+    }
+  }
+
+  hydrateFromNativePrefs();
+
   function getFromStorage(keys) {
     const result = {};
     if (keys === null || keys === undefined) {
@@ -78,6 +106,7 @@
         }
       }
       localStorage.setItem(fullKey, JSON.stringify(newVal));
+      persistToNativePrefs(k, newVal);
       changes[k] = { oldValue: oldVal, newValue: newVal };
     }
 

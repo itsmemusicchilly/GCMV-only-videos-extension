@@ -12,6 +12,32 @@
   if (window.__GACHA_MV_LOADED__) return;
   window.__GACHA_MV_LOADED__ = true;
 
+  // The Android WebView injects this script into YouTube's main world, where
+  // Trusted Types are enforced. Keep all HTML creation behind one private
+  // policy so the same source works both there and in extension isolated worlds.
+  const trustedHtmlPolicy = (() => {
+    if (!window.trustedTypes || typeof window.trustedTypes.createPolicy !== "function") return null;
+    try {
+      return window.trustedTypes.createPolicy("gacha-mv-player", {
+        createHTML: (html) => html
+      });
+    } catch (error) {
+      console.warn("[GCMV] Could not create Trusted Types policy:", error);
+      return null;
+    }
+  })();
+
+  function asTrustedHtml(html) {
+    return trustedHtmlPolicy ? trustedHtmlPolicy.createHTML(html) : html;
+  }
+
+  function appendTrustedHtml(target, html) {
+    const parsed = new DOMParser().parseFromString(asTrustedHtml(html), "text/html");
+    while (parsed.body.firstChild) {
+      target.appendChild(parsed.body.firstChild);
+    }
+  }
+
   let settings = {
     enabled: true,
     blockAds: true,
@@ -513,12 +539,12 @@
       boostContainer = document.createElement("div");
       boostContainer.id = "gachaYtBoostContainer";
       boostContainer.className = "gacha-yt-boost-container";
-      boostContainer.innerHTML = `
+      appendTrustedHtml(boostContainer, `
         <button type="button" class="ytp-button gacha-yt-boost-btn" id="gachaYtBoostBtn" title="Gacha Volume Booster (Shift+Up/Down)">
           <span class="gacha-yt-boost-icon">🔊</span>
           <span class="gacha-yt-boost-badge" id="gachaYtBoostBadge">100%</span>
         </button>
-      `;
+      `);
 
       const volArea = leftControls.querySelector(".ytp-volume-area");
       if (volArea && volArea.nextSibling) {
@@ -535,7 +561,7 @@
       popover = document.createElement("div");
       popover.id = "gachaYtBoostPopover";
       popover.className = "gacha-yt-boost-popover";
-      popover.innerHTML = `
+      appendTrustedHtml(popover, `
         <div class="gacha-yt-boost-pop-header">
           <div class="gacha-yt-boost-pop-title">
             <span>🔊 Volume Booster</span>
@@ -561,7 +587,7 @@
           <button type="button" class="gacha-yt-preset-chip" data-boost="1000">10x MAX</button>
           <button type="button" class="gacha-yt-preset-reset" id="gachaYtBoostReset">↩️ Reset</button>
         </div>
-      `;
+      `);
       player.appendChild(popover);
 
       // Bind Popover events
@@ -796,6 +822,131 @@
   }
 
   // ==========================================================
+  // Auto-confirm YouTube "Are you still watching?" / "Continue watching?"
+  // ==========================================================
+  const STILL_WATCHING_PHRASES = [
+    "continue watching",
+    "still watching",
+    "still there",
+    "video paused",
+    "are you watching",
+    "are you still there"
+  ];
+  const STILL_WATCHING_CONFIRM_LABELS = new Set([
+    "yes",
+    "continue",
+    "watch",
+    "ok",
+    "okay",
+    "continue watching",
+    "watch as usual"
+  ]);
+  let lastStillWatchingDismissAt = 0;
+  let stillWatchingObserver = null;
+  let stillWatchingRaf = false;
+
+  function textLooksLikeStillWatching(text) {
+    const t = (text || "").toLowerCase();
+    return STILL_WATCHING_PHRASES.some((phrase) => t.includes(phrase));
+  }
+
+  function isUsableOverlay(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hasAttribute("hidden") || el.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === "none" || style.visibility === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function clickStillWatchingConfirm(root) {
+    const selectors = [
+      "#confirm-button button",
+      "#confirm-button yt-button-shape button",
+      "yt-button-renderer#confirm-button button",
+      "#confirm-button",
+      "button[aria-label='Yes']",
+      "button[aria-label='Continue watching']",
+      "button[aria-label='Continue']",
+      ".ytp-confirm-dialog-button"
+    ];
+    for (const sel of selectors) {
+      const btn = root.querySelector(sel);
+      if (btn && isUsableOverlay(btn) && typeof btn.click === "function") {
+        btn.click();
+        return true;
+      }
+    }
+
+    const buttons = root.querySelectorAll("button, yt-button-shape, tp-yt-paper-button, ytm-button-renderer, .yt-spec-button-shape-next");
+    for (const btn of buttons) {
+      const label = (btn.getAttribute("aria-label") || btn.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (!STILL_WATCHING_CONFIRM_LABELS.has(label)) {
+        continue;
+      }
+      const clickable = btn.matches("button, [role='button']") ? btn : (btn.querySelector("button, [role='button']") || btn);
+      if (typeof clickable.click === "function") {
+        clickable.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function resumeMainVideo() {
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    if (video && video.paused) {
+      video.play().catch(() => {});
+    }
+  }
+
+  function dismissStillWatchingPrompt() {
+    if (!settings.enabled) return;
+    const now = Date.now();
+    if (now - lastStillWatchingDismissAt < 400) return;
+
+    const dialogs = document.querySelectorAll(
+      "yt-confirm-dialog-renderer, ytm-confirmation-dialog-renderer, ytm-confirm-dialog-renderer, ytd-modal-with-title-and-button-renderer, ytm-modal-with-title-and-button-renderer, tp-yt-paper-dialog, .ytp-popup.ytp-confirm-dialog, [role='dialog']"
+    );
+
+    let dismissed = false;
+    dialogs.forEach((dialog) => {
+      if (dismissed || !isUsableOverlay(dialog) || !textLooksLikeStillWatching(dialog.textContent)) return;
+      if (clickStillWatchingConfirm(dialog)) dismissed = true;
+    });
+
+    if (dismissed) {
+      lastStillWatchingDismissAt = now;
+      document.querySelectorAll("tp-yt-iron-overlay-backdrop, ytm-popup-container .overlay-backdrop").forEach((backdrop) => {
+        if (isUsableOverlay(backdrop)) backdrop.remove();
+      });
+      resumeMainVideo();
+    }
+  }
+
+  function scheduleStillWatchingDismiss() {
+    if (stillWatchingRaf) return;
+    stillWatchingRaf = true;
+    requestAnimationFrame(() => {
+      stillWatchingRaf = false;
+      dismissStillWatchingPrompt();
+    });
+  }
+
+  function startStillWatchingGuard() {
+    if (stillWatchingObserver) return;
+    stillWatchingObserver = new MutationObserver(scheduleStillWatchingDismiss);
+    const attach = () => {
+      const root = document.documentElement || document.body;
+      if (!root) return;
+      stillWatchingObserver.observe(root, { childList: true, subtree: true });
+      dismissStillWatchingPrompt();
+    };
+    if (document.body) attach();
+    else document.addEventListener("DOMContentLoaded", attach, { once: true });
+  }
+
+  // ==========================================================
   // SponsorBlock (https://sponsor.ajay.app) & Custom DB Engine
   // ==========================================================
   function formatCategoryLabel(cat) {
@@ -975,6 +1126,23 @@
       });
     } catch (e) {
       console.warn("[Gacha MV] Could not delete segment from NAS:", e);
+    }
+  }
+
+  async function persistNasCredentialsFromDom() {
+    const urlEl = document.getElementById("gachaNasUrlInput");
+    const tokenEl = document.getElementById("gachaNasTokenInput");
+    const payload = {};
+    if (urlEl) {
+      payload.nasServerUrl = urlEl.value.trim();
+      settings.nasServerUrl = payload.nasServerUrl;
+    }
+    if (tokenEl) {
+      payload.nasAuthToken = tokenEl.value.trim();
+      settings.nasAuthToken = payload.nasAuthToken;
+    }
+    if (Object.keys(payload).length) {
+      await chrome.storage.local.set(payload);
     }
   }
 
@@ -1375,7 +1543,11 @@
       if (playerContainer && !playerContainer.querySelector(".gacha-player-drop-pill")) {
         const pill = document.createElement("div");
         pill.className = "gacha-player-drop-pill";
-        pill.innerHTML = `<span>🌟</span><span>Drop (${formatTime(activePoiHighlight.start)})</span>`;
+        const pillIcon = document.createElement("span");
+        pillIcon.textContent = "🌟";
+        const pillLabel = document.createElement("span");
+        pillLabel.textContent = `Drop (${formatTime(activePoiHighlight.start)})`;
+        pill.append(pillIcon, pillLabel);
         pill.title = "Jump straight to the best part / drop!";
         pill.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -1697,8 +1869,17 @@
     applyFeatures();
     setupFullscreenListener();
 
+    startStillWatchingGuard();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") persistNasCredentialsFromDom();
+    });
+    window.addEventListener("pagehide", persistNasCredentialsFromDom);
+
     if (!adBlockerInterval) {
-      adBlockerInterval = setInterval(runAdBlockerCycle, 1000);
+      adBlockerInterval = setInterval(() => {
+        dismissStillWatchingPrompt();
+        runAdBlockerCycle();
+      }, 1000);
     }
 
     // Auto-retry passes as YouTube Polymer components and feeds hydrate on initial visit
@@ -1721,7 +1902,7 @@
         wasAdPlaying = false;
       }
       applyVolumeBoostGain(false);
-      document.body.classList.remove("gacha-block-ads");
+      document.body?.classList.remove("gacha-block-ads");
       removeSearchChips();
       removeSkipOverlay();
       cleanFeedBadges();
@@ -1737,7 +1918,7 @@
       return;
     }
 
-    document.body.classList.toggle("gacha-block-ads", settings.blockAds !== false);
+    document.body?.classList.toggle("gacha-block-ads", settings.blockAds !== false);
     runAdBlockerCycle();
 
     if (settings.showSearchChips) {
@@ -1814,7 +1995,7 @@
     const skipOverlay = document.getElementById("gacha-skip-overlay");
 
     if (isPlayerFull) {
-      document.body.classList.add("gacha-player-fullscreen");
+      document.body?.classList.add("gacha-player-fullscreen");
 
       if (widget) {
         widget.classList.add("gacha-player-fullscreen-hidden");
@@ -1825,7 +2006,7 @@
         skipOverlay.style.setProperty("display", "none", "important");
       }
     } else {
-      document.body.classList.remove("gacha-player-fullscreen");
+      document.body?.classList.remove("gacha-player-fullscreen");
 
       if (widget) {
         widget.classList.remove("gacha-player-fullscreen-hidden");
@@ -2508,7 +2689,7 @@
     const widget = document.createElement("div");
     widget.id = "gacha-floating-widget";
 
-    const widgetDoc = new DOMParser().parseFromString(`
+    const widgetDoc = new DOMParser().parseFromString(asTrustedHtml(`
       <!-- Launcher Button -->
       <button class="gacha-float-btn" id="gachaFloatToggle" title="Open Gacha MV Jukebox & Skip List">
         <span class="gacha-float-icon">🌸</span>
@@ -2836,7 +3017,7 @@
           </div>
         </div>
       </div>
-    `, "text/html");
+    `), "text/html");
 
     while (widgetDoc.body.firstChild) {
       widget.appendChild(widgetDoc.body.firstChild);
@@ -2921,6 +3102,7 @@
     }
 
     function closePanel() {
+      persistNasCredentialsFromDom();
       const p = document.getElementById("gachaJukeboxPanel");
       if (!p) return;
       p.classList.add("gacha-hidden");
@@ -3062,7 +3244,7 @@
         const isBlocked = e.target.checked;
         await chrome.storage.local.set({ blockAds: isBlocked });
         settings.blockAds = isBlocked;
-        document.body.classList.toggle("gacha-block-ads", settings.enabled && settings.blockAds !== false);
+        document.body?.classList.toggle("gacha-block-ads", settings.enabled && settings.blockAds !== false);
         runAdBlockerCycle();
         showToast(isBlocked ? "🛡️ YouTube Ad Blocker ON" : "🛡️ YouTube Ad Blocker OFF");
       });
@@ -3142,20 +3324,28 @@
       });
     }
 
-    if (nasUrlInput) {
-      nasUrlInput.addEventListener("change", async (e) => {
-        const url = e.target.value.trim();
-        await chrome.storage.local.set({ nasServerUrl: url });
+    async function persistNasInputs(reloadSegments) {
+      const url = nasUrlInput ? nasUrlInput.value.trim() : "";
+      const token = nasTokenInput ? nasTokenInput.value.trim() : "";
+      settings.nasServerUrl = url;
+      settings.nasAuthToken = token;
+      await chrome.storage.local.set({ nasServerUrl: url, nasAuthToken: token });
+      if (reloadSegments) {
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
-      });
+      }
+    }
+
+    if (nasUrlInput) {
+      nasUrlInput.addEventListener("input", () => persistNasInputs(false));
+      nasUrlInput.addEventListener("change", () => persistNasInputs(true));
+      nasUrlInput.addEventListener("blur", () => persistNasInputs(true));
     }
 
     if (nasTokenInput) {
-      nasTokenInput.addEventListener("change", async (e) => {
-        const token = e.target.value.trim();
-        await chrome.storage.local.set({ nasAuthToken: token });
-      });
+      nasTokenInput.addEventListener("input", () => persistNasInputs(false));
+      nasTokenInput.addEventListener("change", () => persistNasInputs(false));
+      nasTokenInput.addEventListener("blur", () => persistNasInputs(false));
     }
 
     if (btnNasTest) {
