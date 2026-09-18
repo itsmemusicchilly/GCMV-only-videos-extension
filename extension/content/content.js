@@ -850,20 +850,7 @@
   let userPlaybackRateBeforeAd = 1;
   let adBlockerInterval = null;
 
-  function runAdBlockerCycle() {
-    if (!settings.enabled || settings.blockAds === false) {
-      if (wasAdPlaying) {
-        wasAdPlaying = false;
-        const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
-        if (video) {
-          video.muted = userMutedStateBeforeAd;
-          video.playbackRate = userPlaybackRateBeforeAd;
-        }
-      }
-      return;
-    }
-
-    // 1. Dismiss Anti-Adblock Enforcement Modals & Overlays
+  function dismissEnforcementModals() {
     const enforcementModals = document.querySelectorAll(
       "ytd-enforcement-message-view-model, tp-yt-paper-dialog:has(ytd-enforcement-message-view-model), yt-playability-error-supported-renderers:has(ytd-enforcement-message-view-model)"
     );
@@ -896,14 +883,38 @@
         }
       }
     });
+  }
 
-    // 2. Video Player Ad Handling (Pre-roll, Mid-roll, Post-roll, Overlays)
-    const player = document.querySelector("#movie_player, .html5-video-player");
+  function runAdBlockerCycle() {
+    if (!settings.enabled || settings.blockAds === false) {
+      if (wasAdPlaying) {
+        wasAdPlaying = false;
+        const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+        if (video) {
+          video.muted = userMutedStateBeforeAd;
+          video.playbackRate = userPlaybackRateBeforeAd;
+        }
+      }
+      return;
+    }
+
+    const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
 
     const isAdActive =
-      (player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))) ||
+      Boolean(player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))) ||
       document.querySelector(".ytp-ad-player-overlay, .ytp-ad-module:not(:empty), .ytp-ad-text, .ytp-ad-preview-container") !== null;
+
+    // Fast-path: When no ad is playing and wasn't playing, skip all heavy DOM queries
+    if (!isAdActive && !wasAdPlaying) {
+      if (document.querySelector("tp-yt-iron-overlay-backdrop, ytd-enforcement-message-view-model")) {
+        dismissEnforcementModals();
+      }
+      return;
+    }
+
+    // Dismiss Anti-Adblock Enforcement Modals & Overlays if present
+    dismissEnforcementModals();
 
     if (isAdActive && video) {
       if (!wasAdPlaying) {
@@ -1778,9 +1789,14 @@
     }, 4500);
   }
 
+  let lastTimeUpdateCheck = 0;
+
   function handleVideoTimeUpdate(e) {
     if (!settings.enabled) return;
-    runAdBlockerCycle();
+    const now = Date.now();
+    if (now - lastTimeUpdateCheck < 250) return;
+    lastTimeUpdateCheck = now;
+
     const video = e.target;
     if (!video || !video.duration || isSkipping || activeVideoSegments.length === 0) return;
 
@@ -4371,12 +4387,14 @@
     if (window.location.href !== lastNavigationHref) {
       handlePageNavigation();
     }
-  }, 500);
+  }, 1200);
 
-  // Continuous DOM observer with 250ms batching for dynamically rendered YouTube items
+  // Continuous DOM observer with adaptive throttling during video playback
   let observerDebounceTimeout = null;
   const observer = new MutationObserver(() => {
     if (observerDebounceTimeout) return;
+    const isWatch = window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts");
+    const debounceDelay = isWatch ? 800 : 350;
     observerDebounceTimeout = setTimeout(() => {
       observerDebounceTimeout = null;
 
@@ -4388,24 +4406,25 @@
         runAdBlockerCycle();
       }
 
-      if (window.location.pathname.startsWith("/watch")) {
+      if (isWatch) {
         injectPlayerBarBoostControl();
       }
 
       if (settings.autoplayGuard && !videoListenerAttached) {
         setupAutoplayGuard();
       }
-      if (settings.showSearchChips && !document.getElementById("gacha-search-chips-bar")) {
+      if (settings.showSearchChips && !isWatch && !document.getElementById("gacha-search-chips-bar")) {
         injectSearchChips();
       }
       if (settings.showJukebox && !document.getElementById("gacha-floating-widget")) {
         injectFloatingJukebox();
       }
 
-      if (settings.filterOfficialVideos) {
+      // Do not run heavy feed card lookups during active video playback
+      if (settings.filterOfficialVideos && !isWatch) {
         applyFeedBadgesAndFilters();
       }
-    }, 250);
+    }, debounceDelay);
   });
 
   observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -4420,28 +4439,26 @@
       setTimeout(init, 300);
     }
 
-    // Continuous Video & UI Watchdog (Runs every 800ms)
+    // Continuous Video & UI Watchdog (Runs every 1500ms)
     setInterval(() => {
       if (!settings.enabled) return;
 
       const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
-      if (video) {
+      if (video && !videoListenerAttached) {
         setupVideoPlayerListeners();
-        if (!video.paused && !video.ended && settings.autoSkipNonGacha) {
-          checkCurrentVideoForAutoSkip();
-        }
       }
 
       if (settings.showJukebox && !document.getElementById("gacha-floating-widget")) {
         injectFloatingJukebox();
       }
-      if (settings.showSearchChips && !document.getElementById("gacha-search-chips-bar")) {
+      const isWatch = window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts");
+      if (settings.showSearchChips && !isWatch && !document.getElementById("gacha-search-chips-bar")) {
         injectSearchChips();
       }
       if (settings.blockAds !== false) {
         runAdBlockerCycle();
       }
-    }, 800);
+    }, 1500);
   }
 
   startInit();
