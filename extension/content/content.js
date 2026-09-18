@@ -31,6 +31,17 @@
     return trustedHtmlPolicy ? trustedHtmlPolicy.createHTML(html) : html;
   }
 
+  function isAndroidApp() {
+    return !!(window.AndroidBridge);
+  }
+
+  function markAndroidHost() {
+    if (!isAndroidApp()) return;
+    const root = document.documentElement;
+    if (root) root.classList.add("gacha-android-app");
+    if (document.body) document.body.classList.add("gacha-android-app");
+  }
+
   function appendTrustedHtml(target, html) {
     const parsed = new DOMParser().parseFromString(asTrustedHtml(html), "text/html");
     while (parsed.body.firstChild) {
@@ -56,7 +67,8 @@
     nasServerUrl: "",
     nasAuthToken: "",
     nasAutoSync: false,
-    volumeBoost: 100
+    volumeBoost: 100,
+    autoUnmute: true
   };
 
   let gachaWhitelist = {
@@ -94,6 +106,12 @@
   let autoplayGuardTimeout = null;
   let autoSkipMutedVideo = null;
   let autoSkipPreviousMuted = false;
+
+  // Auto-Unmute State
+  let userManuallyMutedForVideoId = "";
+  let lastAutoUnmuteToastTime = 0;
+  let lastAutoUnmutedVideoId = "";
+  let gestureUnmuteArmed = false;
 
   // Top-level Global Bridge API for Android app and navigation hooks
   window.__gachaOpenSettings = function() {
@@ -696,6 +714,135 @@
   }
 
   // ==========================================================
+  // Auto-Unmute Audio Engine & Manual Mute Detection
+  // ==========================================================
+  let manualMuteListenersAttached = false;
+
+  function setupManualMuteDetection() {
+    if (manualMuteListenersAttached) return;
+    manualMuteListenersAttached = true;
+
+    document.addEventListener(
+      "click",
+      (e) => {
+        if (!e.isTrusted) return;
+        const muteBtn = e.target.closest(
+          ".ytp-mute-button, .ytm-mute-button, button[aria-label*='Mute' i], button[aria-label*='mute' i], button[title*='Mute' i], button[title*='mute' i]"
+        );
+        if (muteBtn) {
+          setTimeout(() => {
+            const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+            const player = document.getElementById("movie_player");
+            const isMuted = (video && video.muted) || (player && typeof player.isMuted === "function" && player.isMuted());
+            const vid = getCurrentVideoId();
+            if (isMuted) {
+              userManuallyMutedForVideoId = vid;
+            } else {
+              userManuallyMutedForVideoId = "";
+            }
+          }, 80);
+        }
+      },
+      true
+    );
+
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (!e.isTrusted) return;
+        if (e.key === "m" || e.key === "M") {
+          const tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
+          if (tag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable)) return;
+          setTimeout(() => {
+            const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+            const player = document.getElementById("movie_player");
+            const isMuted = (video && video.muted) || (player && typeof player.isMuted === "function" && player.isMuted());
+            const vid = getCurrentVideoId();
+            if (isMuted) {
+              userManuallyMutedForVideoId = vid;
+            } else {
+              userManuallyMutedForVideoId = "";
+            }
+          }, 80);
+        }
+      },
+      true
+    );
+  }
+
+  function armUserGestureUnmute(targetVideoId) {
+    if (gestureUnmuteArmed) return;
+    gestureUnmuteArmed = true;
+
+    const onUserGesture = () => {
+      window.removeEventListener("pointerdown", onUserGesture, true);
+      window.removeEventListener("click", onUserGesture, true);
+      window.removeEventListener("touchstart", onUserGesture, true);
+      window.removeEventListener("keydown", onUserGesture, true);
+      gestureUnmuteArmed = false;
+
+      setTimeout(() => {
+        attemptAutoUnmute("user-gesture");
+      }, 60);
+    };
+
+    window.addEventListener("pointerdown", onUserGesture, { capture: true, once: true });
+    window.addEventListener("click", onUserGesture, { capture: true, once: true });
+    window.addEventListener("touchstart", onUserGesture, { capture: true, once: true });
+    window.addEventListener("keydown", onUserGesture, { capture: true, once: true });
+  }
+
+  function attemptAutoUnmute(reason = "") {
+    if (!settings.enabled || settings.autoUnmute === false) return;
+    if (wasAdPlaying) return;
+
+    const currentVid = getCurrentVideoId();
+    if (userManuallyMutedForVideoId && userManuallyMutedForVideoId === currentVid) {
+      return;
+    }
+
+    // Auto-click YouTube "Tap to unmute" overlays / buttons if present
+    const unmuteOverlays = document.querySelectorAll(
+      ".ytp-unmute, .player-unmute, button.ytp-unmute-button, .ytm-unmute, button[aria-label*='unmute' i], [title*='unmute' i]"
+    );
+    unmuteOverlays.forEach((btn) => {
+      if (typeof btn.click === "function") {
+        try { btn.click(); } catch (e) {}
+      }
+    });
+
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const player = document.getElementById("movie_player");
+    if (!video) return;
+
+    const wasMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+
+    if (wasMuted) {
+      try {
+        video.muted = false;
+      } catch (e) {}
+
+      if (player && typeof player.unMute === "function") {
+        try {
+          player.unMute();
+        } catch (e) {}
+      }
+
+      const isStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+      if (!isStillMuted) {
+        const now = Date.now();
+        if (lastAutoUnmutedVideoId !== currentVid || now - lastAutoUnmuteToastTime > 6000) {
+          lastAutoUnmuteToastTime = now;
+          lastAutoUnmutedVideoId = currentVid;
+          showToast("🔊 Auto-Unmuted 🌸");
+        }
+      } else {
+        armUserGestureUnmute(currentVid);
+      }
+    }
+  }
+
+  // ==========================================================
   // YouTube Video & Cosmetic Ad Blocker Engine
   // ==========================================================
   let wasAdPlaying = false;
@@ -816,7 +963,13 @@
     } else if (wasAdPlaying && video) {
       // Main video returned, restore audio and playback rate
       wasAdPlaying = false;
-      video.muted = userMutedStateBeforeAd;
+      const currentVid = getCurrentVideoId();
+      if (settings.autoUnmute !== false && userManuallyMutedForVideoId !== currentVid) {
+        video.muted = false;
+        attemptAutoUnmute("ad-finish");
+      } else {
+        video.muted = userMutedStateBeforeAd;
+      }
       video.playbackRate = userPlaybackRateBeforeAd;
     }
   }
@@ -1691,6 +1844,9 @@
       if (vid && activeSegmentVideoId !== vid) {
         loadVideoSegments(vid);
       }
+      if (settings.autoUnmute !== false) {
+        attemptAutoUnmute("play-event");
+      }
     }
   }
 
@@ -1698,6 +1854,10 @@
     const video =
       document.querySelector("video.html5-main-video") || document.querySelector("video");
     if (!video) return;
+
+    if (settings.enabled && settings.autoUnmute !== false) {
+      attemptAutoUnmute("setup-listeners");
+    }
 
     // Initialize Web Audio Booster & Controls
     setupAudioBooster(video);
@@ -1754,6 +1914,20 @@
     // 2. Check title for explicit Gacha keywords
     const titleMatch = GACHA_POSITIVE_KEYWORDS.some((kw) => lowerTitle.includes(kw));
     if (titleMatch) return true;
+
+    // 2b. "MEP" (Multi-Editor Project) is a common Gacha collab format that doesn't
+    // always include the word "gacha"/"gcmv" in the title. Match it as a whole word
+    // (not a plain substring) so it doesn't false-positive on words like "gameplay"
+    // or "homepage", which contain "mep" as a substring.
+    const mepPattern = /\bmeps?\b/i;
+    if (
+      mepPattern.test(lowerTitle) ||
+      mepPattern.test(lowerChannel) ||
+      mepPattern.test(lowerDesc) ||
+      (Array.isArray(keywords) && keywords.some((tag) => mepPattern.test((tag || "").toLowerCase())))
+    ) {
+      return true;
+    }
 
     // 3. Check channel name for Gacha keywords/creators
     const channelMatch = GACHA_POSITIVE_KEYWORDS.some((kw) => lowerChannel.includes(kw));
@@ -1825,6 +1999,7 @@
   // Initialization
   // ==========================================================
   async function init() {
+    markAndroidHost();
     try {
       const data = await chrome.storage.local.get({
         enabled: true,
@@ -1845,6 +2020,7 @@
         nasAuthToken: "",
         nasAutoSync: false,
         volumeBoost: 100,
+        autoUnmute: true,
         customSkipDb: {},
         ignoredSegments: {},
         retimedSegments: {}
@@ -1866,6 +2042,7 @@
 
     await loadWhitelist();
     setupVolumeHotkeys();
+    setupManualMuteDetection();
     applyFeatures();
     setupFullscreenListener();
 
@@ -1893,6 +2070,7 @@
   }
 
   function applyFeatures() {
+    markAndroidHost();
     if (!settings.enabled) {
       restoreAutoSkipMute();
       const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
@@ -2157,7 +2335,7 @@
 
   function findFirstGachaRecommendation() {
     const recommendations = document.querySelectorAll(
-      "ytd-compact-video-renderer, ytd-video-renderer, ytd-rich-item-renderer, ytm-compact-video-renderer, ytm-video-with-context-renderer, ytm-item-section-renderer, ytm-watch-next-video-renderer, .compact-media-item, .media-item"
+      "ytd-compact-video-renderer, ytd-video-renderer, ytd-rich-item-renderer, ytm-compact-video-renderer, ytm-video-with-context-renderer, ytm-rich-item-renderer, ytm-watch-next-video-renderer, ytm-media-item, .compact-media-item, .media-item"
     );
     if (!recommendations || recommendations.length === 0) return null;
 
@@ -2460,23 +2638,27 @@
     }
 
     const cards = document.querySelectorAll(
-      "ytd-video-renderer:not([data-gacha-checked]), ytd-compact-video-renderer:not([data-gacha-checked]), ytd-grid-video-renderer:not([data-gacha-checked]), ytd-rich-item-renderer:not([data-gacha-checked]), ytm-video-with-context-renderer:not([data-gacha-checked]), ytm-compact-video-renderer:not([data-gacha-checked]), ytm-item-section-renderer:not([data-gacha-checked]), ytm-rich-item-renderer:not([data-gacha-checked]), ytm-playlist-video-renderer:not([data-gacha-checked]), .compact-media-item:not([data-gacha-checked]), .media-item:not([data-gacha-checked])"
+      "ytd-video-renderer:not([data-gacha-checked]), ytd-compact-video-renderer:not([data-gacha-checked]), ytd-grid-video-renderer:not([data-gacha-checked]), ytd-rich-item-renderer:not([data-gacha-checked]), ytm-video-with-context-renderer:not([data-gacha-checked]), ytm-compact-video-renderer:not([data-gacha-checked]), ytm-rich-item-renderer:not([data-gacha-checked]), ytm-playlist-video-renderer:not([data-gacha-checked]), ytm-shorts-lockup-view-model:not([data-gacha-checked]), ytm-media-item:not([data-gacha-checked]), .compact-media-item:not([data-gacha-checked]), .media-item:not([data-gacha-checked])"
     );
 
     if (!cards || cards.length === 0) return;
 
     cards.forEach((card) => {
-      const titleEl = card.querySelector("#video-title, #title, .media-item-headline, .compact-media-item-headline, .video-title, h3, h4");
+      const titleEl = card.querySelector("#video-title, #title, .media-item-headline, .compact-media-item-headline, .video-title, h3 a, h4 a, h3 .yt-core-attributed-string, h4 .yt-core-attributed-string, .yt-core-attributed-string");
       const channelEl = card.querySelector("#channel-name, #byline, ytd-channel-name, .media-item-byline, .compact-media-item-byline, ytm-channel-name, .ytm-badge-and-byline-item-byline");
-      const thumbEl = card.querySelector("ytd-thumbnail, #thumbnail, .media-item-thumbnail-container, ytm-thumbnail-cover, .thumbnail, a.media-item-thumbnail-container, a.compact-media-item-image");
+      const thumbEl = card.querySelector("ytd-thumbnail, #thumbnail, .media-item-thumbnail-container, ytm-thumbnail-cover, .thumbnail, a.media-item-thumbnail-container, a.compact-media-item-image, yt-img-shadow, .ytThumbnailViewModelHost");
       const snippetEl = card.querySelector(
         ".metadata-snippet-container, #description-text, .snippet-text, ytd-metadata-snippet-renderer, .media-item-snippet"
       );
 
-      if (!titleEl || !thumbEl) return;
-
-      const title = titleEl.textContent ? titleEl.textContent.trim() : "";
+      let title = titleEl && titleEl.textContent ? titleEl.textContent.trim() : "";
+      if (!title) {
+        const labeled = card.querySelector("a[href*='watch'][aria-label], a[href*='/shorts/'][aria-label]");
+        if (labeled) title = (labeled.getAttribute("aria-label") || "").trim();
+      }
       if (!title) return; // Do not mark skeleton placeholders! Wait until YouTube populates the title.
+
+      const badgeHost = thumbEl || card.querySelector("a[href*='watch'], a[href*='/shorts/']") || card;
 
       card.setAttribute("data-gacha-checked", "1");
       const channel = channelEl ? channelEl.textContent.trim() : "";
@@ -2484,13 +2666,16 @@
 
       // Extract video ID from thumbnail href
       let videoId = "";
-      const link = card.querySelector("a#thumbnail, a.yt-simple-endpoint, a.media-item-thumbnail-container, a.compact-media-item-image, a[href*='watch']");
+      const link = card.querySelector("a#thumbnail, a.yt-simple-endpoint, a.media-item-thumbnail-container, a.compact-media-item-image, a[href*='watch'], a[href*='/shorts/']");
       if (link && link.href) {
         try {
           const u = new URL(link.href, window.location.origin);
           videoId = u.searchParams.get("v") || "";
           if (!videoId && u.pathname.startsWith("/watch/")) {
             videoId = u.pathname.replace("/watch/", "");
+          }
+          if (!videoId && u.pathname.startsWith("/shorts/")) {
+            videoId = u.pathname.replace("/shorts/", "").split("/")[0];
           }
         } catch (e) {}
       }
@@ -2500,30 +2685,30 @@
         card.classList.remove("gacha-dimmed-video");
 
         // Remove any whitelist button if present
-        const oldWBtn = thumbEl.querySelector(".gacha-whitelist-btn");
+        const oldWBtn = badgeHost.querySelector(".gacha-whitelist-btn");
         if (oldWBtn) oldWBtn.remove();
 
         // Add verified badge
-        if (!thumbEl.querySelector(".gacha-verified-badge")) {
+        if (!badgeHost.querySelector(".gacha-verified-badge")) {
           const badge = document.createElement("span");
           badge.className = "gacha-verified-badge";
           badge.textContent = title.toLowerCase().includes("lyric") ? "🎀 Gacha Lyrics" : "🌸 Gacha MV";
-          thumbEl.style.position = "relative";
-          thumbEl.appendChild(badge);
+          badgeHost.style.position = "relative";
+          badgeHost.appendChild(badge);
         }
       } else {
         // Any video that is NOT Gacha is dimmed
         card.classList.add("gacha-dimmed-video");
-        const badge = thumbEl.querySelector(".gacha-verified-badge");
+        const badge = badgeHost.querySelector(".gacha-verified-badge");
         if (badge) badge.remove();
 
         // Add 1-Click "It's Gacha!" button onto dimmed card (Solution 3)
-        if (!thumbEl.querySelector(".gacha-whitelist-btn")) {
+        if (!badgeHost.querySelector(".gacha-whitelist-btn")) {
           const wBtn = document.createElement("button");
           wBtn.className = "gacha-whitelist-btn";
           wBtn.textContent = "🌸 It's Gacha!";
           wBtn.title = "Click to mark as Gacha and never dim or skip again";
-          thumbEl.style.position = "relative";
+          badgeHost.style.position = "relative";
 
           wBtn.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -2531,7 +2716,7 @@
             whitelistGacha(videoId, channel);
           });
 
-          thumbEl.appendChild(wBtn);
+          badgeHost.appendChild(wBtn);
         }
       }
     });
@@ -2560,34 +2745,37 @@
 
   function getChipsMountTarget() {
     const path = window.location.pathname;
-    if (path.startsWith("/results")) {
-      return (
-        document.querySelector("ytd-search #primary") ||
-        document.querySelector("ytd-two-column-search-results-renderer #primary") ||
-        document.querySelector("#primary #contents") ||
-        document.querySelector("#primary") ||
-        document.querySelector("ytm-search ytm-section-list-renderer") ||
-        document.querySelector("ytm-search") ||
-        document.querySelector(".search-results") ||
-        document.querySelector("ytm-mobile-topbar-renderer")
-      );
-    } else if (path.startsWith("/watch")) {
+    if (path.startsWith("/watch")) {
       // Do not inject search chips in sidebar on watch pages
       return null;
-    } else {
-      return (
-        document.querySelector("ytd-browse #primary") ||
-        document.querySelector("ytd-rich-grid-renderer #header") ||
-        document.querySelector("ytd-rich-grid-renderer") ||
-        document.querySelector("#primary #contents") ||
-        document.querySelector("#primary") ||
-        document.querySelector("ytd-browse") ||
-        document.querySelector("ytm-browse ytm-section-list-renderer") ||
-        document.querySelector("ytm-browse") ||
-        document.querySelector("ytm-feed-filter-chip-bar-renderer") ||
-        document.querySelector("ytm-mobile-topbar-renderer")
-      );
     }
+
+    const existingHost = document.getElementById("gacha-chips-host");
+    const mobileTopbar = document.querySelector("ytm-mobile-topbar-renderer");
+    const chipBar = document.querySelector("ytm-feed-filter-chip-bar-renderer, ytd-feed-filter-chip-bar-renderer, ytm-chip-cloud-renderer");
+    const masthead = document.querySelector("#masthead-container, ytd-masthead");
+
+    if (existingHost && document.contains(existingHost)) {
+      if (mobileTopbar && existingHost.previousElementSibling !== mobileTopbar && mobileTopbar.parentNode) {
+        mobileTopbar.insertAdjacentElement("afterend", existingHost);
+      }
+      return existingHost;
+    }
+
+    const host = document.createElement("div");
+    host.id = "gacha-chips-host";
+
+    if (mobileTopbar && mobileTopbar.parentNode) {
+      mobileTopbar.insertAdjacentElement("afterend", host);
+    } else if (chipBar && chipBar.parentNode) {
+      chipBar.insertAdjacentElement("beforebegin", host);
+    } else if (masthead && masthead.parentNode) {
+      masthead.insertAdjacentElement("afterend", host);
+    } else {
+      const parent = document.body || document.documentElement;
+      parent.insertBefore(host, parent.firstChild);
+    }
+    return host;
   }
 
   function injectSearchChips() {
@@ -2997,6 +3185,15 @@
               <input type="checkbox" id="inpageToggleAutoplayGuard" class="gacha-inpage-switch" ${settings.autoplayGuard ? "checked" : ""}>
             </label>
 
+            <!-- Auto Unmute Audio -->
+            <label class="gacha-inpage-item" for="inpageToggleAutoUnmute">
+              <div class="gacha-inpage-desc">
+                <span class="gacha-inpage-title">🔊 Auto Unmute Audio</span>
+                <span class="gacha-inpage-sub">Unmutes videos on load &amp; after ads</span>
+              </div>
+              <input type="checkbox" id="inpageToggleAutoUnmute" class="gacha-inpage-switch" ${settings.autoUnmute !== false ? "checked" : ""}>
+            </label>
+
             <!-- Search Filter Chips -->
             <label class="gacha-inpage-item" for="inpageToggleSearchChips">
               <div class="gacha-inpage-desc">
@@ -3026,6 +3223,10 @@
     const target = document.body || document.documentElement;
     if (!target) return;
     target.appendChild(widget);
+    markAndroidHost();
+    if (isAndroidApp()) {
+      widget.classList.add("gacha-android-embedded");
+    }
 
     // Mobile Backdrop Overlay
     let backdrop = document.getElementById("gacha-drawer-backdrop");
@@ -3071,6 +3272,7 @@
     const btnNasExport = widget.querySelector("#gachaBtnNasExport");
     const btnNasImport = widget.querySelector("#gachaBtnNasImport");
     const inpageToggleAutoplayGuard = widget.querySelector("#inpageToggleAutoplayGuard");
+    const inpageToggleAutoUnmute = widget.querySelector("#inpageToggleAutoUnmute");
     const inpageToggleSearchChips = widget.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = widget.querySelector("#inpageToggleFilterOfficial");
 
@@ -3391,6 +3593,16 @@
       });
     }
 
+    if (inpageToggleAutoUnmute) {
+      inpageToggleAutoUnmute.addEventListener("change", async (e) => {
+        await chrome.storage.local.set({ autoUnmute: e.target.checked });
+        showToast(e.target.checked ? "🔊 Auto Unmute ON" : "🔇 Auto Unmute OFF");
+        if (e.target.checked) {
+          attemptAutoUnmute("toggle-enabled");
+        }
+      });
+    }
+
     if (inpageToggleSearchChips) {
       inpageToggleSearchChips.addEventListener("change", async (e) => {
         await chrome.storage.local.set({ showSearchChips: e.target.checked });
@@ -3512,6 +3724,7 @@
     const nasTokenInput = document.querySelector("#gachaNasTokenInput");
     const inpageToggleNasAutoSync = document.querySelector("#inpageToggleNasAutoSync");
     const inpageToggleAutoplayGuard = document.querySelector("#inpageToggleAutoplayGuard");
+    const inpageToggleAutoUnmute = document.querySelector("#inpageToggleAutoUnmute");
     const inpageToggleSearchChips = document.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = document.querySelector("#inpageToggleFilterOfficial");
     const statusText = document.querySelector("#gachaPanelSkipperStatus");
@@ -3531,6 +3744,7 @@
     if (nasTokenInput) nasTokenInput.value = settings.nasAuthToken || "";
     if (inpageToggleNasAutoSync) inpageToggleNasAutoSync.checked = settings.nasAutoSync;
     if (inpageToggleAutoplayGuard) inpageToggleAutoplayGuard.checked = settings.autoplayGuard;
+    if (inpageToggleAutoUnmute) inpageToggleAutoUnmute.checked = settings.autoUnmute !== false;
     if (inpageToggleSearchChips) inpageToggleSearchChips.checked = settings.showSearchChips;
     if (inpageToggleFilterOfficial) inpageToggleFilterOfficial.checked = settings.filterOfficialVideos;
 
@@ -3840,7 +4054,7 @@
     let retryCount = 0;
     function evaluateRecommendations() {
       const recommendations = document.querySelectorAll(
-        "ytd-compact-video-renderer, ytd-video-renderer, ytd-rich-item-renderer, ytm-compact-video-renderer, ytm-video-with-context-renderer, ytm-item-section-renderer, ytm-watch-next-video-renderer, .compact-media-item, .media-item"
+        "ytd-compact-video-renderer, ytd-video-renderer, ytd-rich-item-renderer, ytm-compact-video-renderer, ytm-video-with-context-renderer, ytm-rich-item-renderer, ytm-watch-next-video-renderer, ytm-media-item, .compact-media-item, .media-item"
       );
 
       if (!recommendations || recommendations.length === 0) {
@@ -3978,12 +4192,16 @@
         "nasServerUrl",
         "nasAuthToken",
         "nasAutoSync",
-        "volumeBoost"
+        "volumeBoost",
+        "autoUnmute"
       ]) {
         if (changes[key] !== undefined) {
           settings[key] = changes[key].newValue;
           changed = true;
         }
+      }
+      if (changes.autoUnmute !== undefined && changes.autoUnmute.newValue) {
+        attemptAutoUnmute("storage-enabled");
       }
       if (changes.volumeBoost !== undefined) {
         applyVolumeBoostGain();
@@ -4094,6 +4312,7 @@
     }
     videoListenerAttached = false;
     userDismissedSkipForVideoId = "";
+    userManuallyMutedForVideoId = "";
     isSkipping = false;
     lastSkippedSegment = null;
     removeSkipOverlay();
@@ -4125,6 +4344,9 @@
         if (settings.enabled) {
           applyFeatures();
           ensureAudioContextResumed();
+          if (settings.autoUnmute !== false) {
+            attemptAutoUnmute("navigation-delay");
+          }
         }
       }, delay);
     });

@@ -23,22 +23,46 @@ cp -r "$SCRIPT_DIR/extension/popup/"* "$SCRIPT_DIR/android-app/app/src/main/asse
 cp -r "$SCRIPT_DIR/extension/icons/"* "$SCRIPT_DIR/android-app/app/src/main/assets/extension/icons/"
 
 # 2. Build APK with Gradle
-echo "⚙️ Running Gradle assembleDebug..."
+echo "⚙️ Running Gradle assembleRelease..."
 cd "$SCRIPT_DIR/android-app"
-./gradlew assembleDebug
+./gradlew assembleRelease
 
-# 3. Copy APK to root directory
-APK_SRC="$SCRIPT_DIR/android-app/app/build/outputs/apk/debug/app-debug.apk"
+# 3. Re-sign with v1 + v2 so cheap Android TV boxes / emulators can install
+APK_SRC="$SCRIPT_DIR/android-app/app/build/outputs/apk/release/app-release.apk"
 APK_DEST="$SCRIPT_DIR/GachaMVPlayer-YouTube.apk"
+DEBUG_KEYSTORE="${DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+BUILD_TOOLS_DIR="$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
+APKSIGNER="${BUILD_TOOLS_DIR}apksigner"
+ZIPALIGN="${BUILD_TOOLS_DIR}zipalign"
 
-if [ -f "$APK_SRC" ]; then
-    cp "$APK_SRC" "$APK_DEST"
-    echo "=========================================================="
-    echo "✅ SUCCESS: APK generated at:"
-    echo "   $APK_DEST"
-    echo "   File size: $(du -h "$APK_DEST" | cut -f1)"
-    echo "=========================================================="
-else
+if [ ! -f "$APK_SRC" ]; then
     echo "❌ ERROR: Output APK not found at $APK_SRC"
     exit 1
 fi
+
+echo "🔏 Re-signing APK with v1 (JAR) + v2 signatures for player compatibility..."
+ALIGNED="$SCRIPT_DIR/android-app/app/build/outputs/apk/release/app-release-aligned.apk"
+SIGNED="$SCRIPT_DIR/android-app/app/build/outputs/apk/release/app-release-signed.apk"
+rm -f "$ALIGNED" "$SIGNED"
+"$ZIPALIGN" -f -p 4 "$APK_SRC" "$ALIGNED"
+"$APKSIGNER" sign \
+    --ks "$DEBUG_KEYSTORE" \
+    --ks-key-alias androiddebugkey \
+    --ks-pass pass:android \
+    --key-pass pass:android \
+    --min-sdk-version 21 \
+    --v1-signing-enabled true \
+    --v2-signing-enabled true \
+    --v3-signing-enabled false \
+    --out "$SIGNED" \
+    "$ALIGNED"
+"$APKSIGNER" verify --min-sdk-version 21 --verbose "$SIGNED"
+cp "$SIGNED" "$APK_SRC"
+cp "$SIGNED" "$APK_DEST"
+rm -f "$ALIGNED" "$SIGNED"
+
+echo "=========================================================="
+echo "✅ SUCCESS: APK generated at:"
+echo "   $APK_DEST"
+echo "   File size: $(du -h "$APK_DEST" | cut -f1)"
+echo "=========================================================="

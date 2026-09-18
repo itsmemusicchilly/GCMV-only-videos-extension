@@ -304,6 +304,45 @@
                 app:trackTint="#7E2653" />
         </LinearLayout>
 
+        <!-- Auto Unmute Audio -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingVertical="7dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔊 Auto Unmute Audio"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Automatically unmutes videos on load &amp; after ads"
+                    android:textColor="#A09BB8"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switch_auto_unmute"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                app:thumbTint="#FF2E93"
+                app:trackTint="#7E2653" />
+        </LinearLayout>
+
         <!-- 6. Highlight Gacha & Dim Non-Gacha -->
         <LinearLayout
             android:layout_width="match_parent"

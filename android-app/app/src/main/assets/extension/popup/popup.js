@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const toggleBlockAds = document.getElementById("toggleBlockAds");
   const toggleAutoSkipNonGacha = document.getElementById("toggleAutoSkipNonGacha");
   const toggleAutoplayGuard = document.getElementById("toggleAutoplayGuard");
+  const toggleAutoUnmute = document.getElementById("toggleAutoUnmute");
   const toggleFilterOfficial = document.getElementById("toggleFilterOfficial");
 
   const toggleSkipNonMusic = document.getElementById("toggleSkipNonMusic");
@@ -111,7 +112,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       nasServerUrl: "",
       nasAuthToken: "",
       nasAutoSync: false,
-      volumeBoost: 100
+      volumeBoost: 100,
+      autoUnmute: true
     });
 
     // Version 1.0.0 enabled NAS access without authentication. Disable that
@@ -130,6 +132,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (toggleBlockAds) toggleBlockAds.checked = settings.blockAds !== false;
     if (toggleAutoSkipNonGacha) toggleAutoSkipNonGacha.checked = settings.autoSkipNonGacha;
     toggleAutoplayGuard.checked = settings.autoplayGuard;
+    if (toggleAutoUnmute) toggleAutoUnmute.checked = settings.autoUnmute !== false;
     if (toggleFilterOfficial) toggleFilterOfficial.checked = settings.filterOfficialVideos;
     if (toggleSkipNonMusic) toggleSkipNonMusic.checked = settings.skipNonMusic;
     if (toggleSkipIntroOutro) toggleSkipIntroOutro.checked = settings.skipIntroOutro;
@@ -224,6 +227,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   toggleAutoplayGuard.addEventListener("change", async (e) => {
     await chrome.storage.local.set({ autoplayGuard: e.target.checked });
   });
+
+  if (toggleAutoUnmute) {
+    toggleAutoUnmute.addEventListener("change", async (e) => {
+      await chrome.storage.local.set({ autoUnmute: e.target.checked });
+    });
+  }
 
   if (toggleFilterOfficial) {
     toggleFilterOfficial.addEventListener("change", async (e) => {

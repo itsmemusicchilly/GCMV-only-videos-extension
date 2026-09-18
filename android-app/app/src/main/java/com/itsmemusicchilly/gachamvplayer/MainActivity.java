@@ -225,6 +225,7 @@ public class MainActivity extends AppCompatActivity {
         com.google.android.material.switchmaterial.SwitchMaterial swAdBlock = view.findViewById(R.id.switch_adblock);
         com.google.android.material.switchmaterial.SwitchMaterial swAutoSkip = view.findViewById(R.id.switch_autoskip);
         com.google.android.material.switchmaterial.SwitchMaterial swGuard = view.findViewById(R.id.switch_autoplayguard);
+        com.google.android.material.switchmaterial.SwitchMaterial swAutoUnmute = view.findViewById(R.id.switch_auto_unmute);
         com.google.android.material.switchmaterial.SwitchMaterial swFilterOfficial = view.findViewById(R.id.switch_filter_official);
         com.google.android.material.switchmaterial.SwitchMaterial swSkipNonMusic = view.findViewById(R.id.switch_skip_nonmusic);
         com.google.android.material.switchmaterial.SwitchMaterial swSkipIntroOutro = view.findViewById(R.id.switch_skip_introoutro);
@@ -255,6 +256,7 @@ public class MainActivity extends AppCompatActivity {
         boolean blockAds = sp.getBoolean("blockAds", true);
         boolean autoSkip = sp.getBoolean("autoSkipNonGacha", true);
         boolean guard = sp.getBoolean("autoplayGuard", true);
+        boolean autoUnmute = sp.getBoolean("autoUnmute", true);
         boolean filterOfficial = sp.getBoolean("filterOfficialVideos", true);
         boolean skipNonMusic = sp.getBoolean("skipNonMusic", true);
         boolean skipIntroOutro = sp.getBoolean("skipIntroOutro", true);
@@ -274,6 +276,7 @@ public class MainActivity extends AppCompatActivity {
         if (swAdBlock != null) swAdBlock.setChecked(blockAds);
         if (swAutoSkip != null) swAutoSkip.setChecked(autoSkip);
         if (swGuard != null) swGuard.setChecked(guard);
+        if (swAutoUnmute != null) swAutoUnmute.setChecked(autoUnmute);
         if (swFilterOfficial != null) swFilterOfficial.setChecked(filterOfficial);
         if (swSkipNonMusic != null) swSkipNonMusic.setChecked(skipNonMusic);
         if (swSkipIntroOutro != null) swSkipIntroOutro.setChecked(skipIntroOutro);
@@ -308,6 +311,7 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swAdBlock, "blockAds", null);
         autoSaveSetting(swAutoSkip, "autoSkipNonGacha", null);
         autoSaveSetting(swGuard, "autoplayGuard", null);
+        autoSaveSetting(swAutoUnmute, "autoUnmute", null);
         autoSaveSetting(swFilterOfficial, "filterOfficialVideos", null);
         autoSaveSetting(swSkipNonMusic, "skipNonMusic", null);
         autoSaveSetting(swSkipIntroOutro, "skipIntroOutro", null);
@@ -524,7 +528,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final Set<String> BOOLEAN_PREF_KEYS = new HashSet<>(Arrays.asList(
             "enabled", "showJukebox", "showSearchChips", "blockAds", "autoSkipNonGacha",
-            "autoplayGuard", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
+            "autoplayGuard", "autoUnmute", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
             "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
             "useNasServer", "nasAutoSync"
     ));
@@ -784,7 +788,7 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setVisibility(View.VISIBLE);
         if (topBar != null) topBar.setVisibility(View.VISIBLE);
-        if (fabSettings != null) fabSettings.setVisibility(View.VISIBLE);
+        if (fabSettings != null) fabSettings.setVisibility(View.GONE);
 
         if (customViewCallback != null) {
             customViewCallback.onCustomViewHidden();

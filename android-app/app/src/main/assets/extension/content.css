@@ -19,6 +19,26 @@ body.gacha-player-fullscreen #gacha-skip-overlay,
   pointer-events: none !important;
 }
 
+/* Android app already has Jukebox/Skips/Settings in the native top bar.
+   Hide the in-page launcher so it does not cover YouTube's bottom tabs. */
+html.gacha-android-app .gacha-float-btn {
+  display: none !important;
+}
+
+html.gacha-android-app #gacha-floating-widget {
+  bottom: 0 !important;
+  right: 0 !important;
+  left: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+}
+
+html.gacha-android-app #gacha-floating-widget .gacha-panel {
+  pointer-events: auto !important;
+}
+
 /* ==========================================================
    YouTube Quick Filter Chips Bar (In-Content Placement)
    ========================================================== */
@@ -1516,17 +1536,25 @@ select.gacha-time-input option:hover {
 }
 
 @media (max-width: 768px) {
-  /* Floating Action Button on mobile */
+  /* Sit above YouTube's Home/Shorts/You pivot bar instead of covering it */
   #gacha-floating-widget {
-    bottom: 16px !important;
-    right: 14px !important;
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 10px) !important;
+    right: 10px !important;
   }
 
   .gacha-float-btn {
-    padding: 8px 14px !important;
-    font-size: 12px !important;
-    border-radius: 26px !important;
+    width: 48px !important;
+    height: 48px !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    border-radius: 50% !important;
+    justify-content: center !important;
     box-shadow: 0 4px 18px rgba(255, 46, 147, 0.55) !important;
+  }
+
+  .gacha-float-btn > span:not(.gacha-float-icon),
+  .gacha-float-btn .gacha-eq {
+    display: none !important;
   }
 
   .gacha-float-icon {
@@ -1590,6 +1618,13 @@ select.gacha-time-input option:hover {
   }
 
   /* Search chips bar on mobile feeds */
+  #gacha-chips-host {
+    display: block !important;
+    width: 100% !important;
+    position: relative !important;
+    z-index: 1750 !important;
+  }
+
   #gacha-search-chips-bar {
     padding: 6px 10px !important;
     margin: 6px 8px 10px 8px !important;
