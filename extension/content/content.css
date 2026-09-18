@@ -1099,6 +1099,29 @@ select.gacha-time-input option:hover {
   color: #9d99b2;
 }
 
+.gacha-inpage-select {
+  background: #1e1a34;
+  color: #ffffff;
+  border: 1px solid rgba(255, 46, 147, 0.4);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  font-weight: bold;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.gacha-inpage-select:hover,
+.gacha-inpage-select:focus {
+  border-color: #ff2e93;
+}
+
+.gacha-inpage-select option {
+  background: #161329;
+  color: #ffffff;
+}
+
 .gacha-inpage-switch {
   appearance: none;
   -webkit-appearance: none;

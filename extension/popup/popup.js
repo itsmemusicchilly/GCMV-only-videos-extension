@@ -16,6 +16,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const toggleAutoSkipNonGacha = document.getElementById("toggleAutoSkipNonGacha");
   const toggleAutoplayGuard = document.getElementById("toggleAutoplayGuard");
   const toggleAutoUnmute = document.getElementById("toggleAutoUnmute");
+  const selectResolution = document.getElementById("selectResolution");
   const toggleFilterOfficial = document.getElementById("toggleFilterOfficial");
 
   const toggleSkipNonMusic = document.getElementById("toggleSkipNonMusic");
@@ -113,7 +114,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       nasAuthToken: "",
       nasAutoSync: false,
       volumeBoost: 100,
-      autoUnmute: true
+      autoUnmute: true,
+      preferredResolution: "auto"
     });
 
     // Version 1.0.0 enabled NAS access without authentication. Disable that
@@ -133,6 +135,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (toggleAutoSkipNonGacha) toggleAutoSkipNonGacha.checked = settings.autoSkipNonGacha;
     toggleAutoplayGuard.checked = settings.autoplayGuard;
     if (toggleAutoUnmute) toggleAutoUnmute.checked = settings.autoUnmute !== false;
+    if (selectResolution) selectResolution.value = settings.preferredResolution || "auto";
     if (toggleFilterOfficial) toggleFilterOfficial.checked = settings.filterOfficialVideos;
     if (toggleSkipNonMusic) toggleSkipNonMusic.checked = settings.skipNonMusic;
     if (toggleSkipIntroOutro) toggleSkipIntroOutro.checked = settings.skipIntroOutro;
@@ -231,6 +234,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (toggleAutoUnmute) {
     toggleAutoUnmute.addEventListener("change", async (e) => {
       await chrome.storage.local.set({ autoUnmute: e.target.checked });
+    });
+  }
+
+  if (selectResolution) {
+    selectResolution.addEventListener("change", async (e) => {
+      await chrome.storage.local.set({ preferredResolution: e.target.value });
     });
   }
 

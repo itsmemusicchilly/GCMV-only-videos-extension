@@ -26,11 +26,14 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.net.Uri;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -312,6 +315,50 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swAutoSkip, "autoSkipNonGacha", null);
         autoSaveSetting(swGuard, "autoplayGuard", null);
         autoSaveSetting(swAutoUnmute, "autoUnmute", null);
+
+        Spinner spResolution = view.findViewById(R.id.spinner_resolution);
+        String[] resDisplayOptions = new String[]{"Auto", "1080p", "720p", "480p", "360p", "240p", "144p"};
+        String[] resValueOptions = new String[]{"auto", "1080p", "720p", "480p", "360p", "240p", "144p"};
+        String preferredRes = sp.getString("preferredResolution", "auto");
+
+        if (spResolution != null) {
+            ArrayAdapter<String> resAdapter = new ArrayAdapter<>(
+                    this,
+                    R.layout.item_spinner_resolution,
+                    resDisplayOptions
+            );
+            resAdapter.setDropDownViewResource(R.layout.item_spinner_dropdown);
+            spResolution.setAdapter(resAdapter);
+
+            int selectedIndex = 0;
+            for (int i = 0; i < resValueOptions.length; i++) {
+                if (resValueOptions[i].equalsIgnoreCase(preferredRes)) {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+            spResolution.setSelection(selectedIndex, false);
+
+            final boolean[] isResFirstCall = {true};
+            spResolution.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(AdapterView<?> parent, View v, int position, long id) {
+                    if (isResFirstCall[0]) {
+                        isResFirstCall[0] = false;
+                        return;
+                    }
+                    if (position >= 0 && position < resValueOptions.length) {
+                        String chosenVal = resValueOptions[position];
+                        sp.edit().putString("preferredResolution", chosenVal).apply();
+                        syncSettingToWebView("preferredResolution", chosenVal);
+                    }
+                }
+
+                @Override
+                public void onNothingSelected(AdapterView<?> parent) {}
+            });
+        }
+
         autoSaveSetting(swFilterOfficial, "filterOfficialVideos", null);
         autoSaveSetting(swSkipNonMusic, "skipNonMusic", null);
         autoSaveSetting(swSkipIntroOutro, "skipIntroOutro", null);

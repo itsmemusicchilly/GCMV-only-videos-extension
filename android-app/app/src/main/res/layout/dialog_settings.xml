@@ -343,6 +343,45 @@
                 app:trackTint="#7E2653" />
         </LinearLayout>
 
+        <!-- Preferred Resolution -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingVertical="7dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📺 Preferred Resolution"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Auto fallback to highest if not found"
+                    android:textColor="#A09BB8"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <Spinner
+                android:id="@+id/spinner_resolution"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_spinner"
+                android:minHeight="36dp"
+                android:popupBackground="#1A1829" />
+        </LinearLayout>
+
         <!-- 6. Highlight Gacha & Dim Non-Gacha -->
         <LinearLayout
             android:layout_width="match_parent"

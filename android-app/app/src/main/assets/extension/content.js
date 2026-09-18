@@ -68,7 +68,8 @@
     nasAuthToken: "",
     nasAutoSync: false,
     volumeBoost: 100,
-    autoUnmute: true
+    autoUnmute: true,
+    preferredResolution: "auto"
   };
 
   let gachaWhitelist = {
@@ -839,6 +840,136 @@
       } else {
         armUserGestureUnmute(currentVid);
       }
+    }
+  }
+
+  // ==========================================================
+  // Preferred Video Resolution Engine
+  // ==========================================================
+  const QUALITY_HEIGHT_MAP = {
+    highres: 4320,
+    hd2880: 2880,
+    hd2160: 2160,
+    hd1440: 1440,
+    hd1080: 1080,
+    hd720: 720,
+    large: 480,
+    medium: 360,
+    small: 240,
+    tiny: 144
+  };
+
+  let lastAppliedResVideoId = "";
+  let lastAppliedResChoice = "";
+
+  function handleVideoMetadataForQuality() {
+    applyPreferredResolution("metadata-loaded");
+  }
+
+  function applyPreferredResolution(reason = "") {
+    if (!settings.enabled) return;
+    const target = (settings.preferredResolution || "auto").toLowerCase().trim();
+    const currentVid = getCurrentVideoId();
+
+    const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (!player) return;
+
+    if (target === "auto") {
+      if (lastAppliedResVideoId === currentVid && lastAppliedResChoice === "auto") return;
+      if (typeof player.setPlaybackQualityRange === "function") {
+        try { player.setPlaybackQualityRange("auto", "auto"); } catch (e) {}
+      }
+      if (typeof player.setPlaybackQuality === "function") {
+        try { player.setPlaybackQuality("auto"); } catch (e) {}
+      }
+      lastAppliedResVideoId = currentVid;
+      lastAppliedResChoice = "auto";
+      return;
+    }
+
+    const targetHeight = parseInt(target, 10);
+    if (isNaN(targetHeight)) return;
+
+    let levels = [];
+    if (typeof player.getAvailableQualityLevels === "function") {
+      try {
+        levels = player.getAvailableQualityLevels() || [];
+      } catch (e) {}
+    } else if (typeof player.getAvailableQualityData === "function") {
+      try {
+        const data = player.getAvailableQualityData() || [];
+        levels = data.map((d) => (d && typeof d === "object" ? (d.quality || d.qualityLabel) : d));
+      } catch (e) {}
+    }
+
+    if (!Array.isArray(levels) || levels.length === 0) return;
+
+    const validLevels = [];
+    levels.forEach((lvl) => {
+      if (!lvl || lvl === "auto") return;
+      const code = typeof lvl === "string" ? lvl : (lvl.quality || "");
+      if (!code || code === "auto") return;
+      let height = QUALITY_HEIGHT_MAP[code];
+      if (!height) {
+        const match = String(code).match(/(\d+)/);
+        if (match) height = parseInt(match[1], 10);
+      }
+      if (height && !isNaN(height)) {
+        if (!validLevels.some((item) => item.code === code)) {
+          validLevels.push({ code, height });
+        }
+      }
+    });
+
+    if (validLevels.length === 0) return;
+
+    // Sort descending: highest resolution first
+    validLevels.sort((a, b) => b.height - a.height);
+
+    let chosenCode = "";
+    // 1. Exact match
+    const exact = validLevels.find((l) => l.height === targetHeight);
+    if (exact) {
+      chosenCode = exact.code;
+    } else if (targetHeight >= validLevels[0].height) {
+      // 2. Target is higher than highest available -> choose highest
+      chosenCode = validLevels[0].code;
+    } else {
+      // 3. Target is lower than highest, find highest available <= targetHeight
+      const below = validLevels.filter((l) => l.height <= targetHeight);
+      if (below.length > 0) {
+        chosenCode = below[0].code;
+      } else {
+        chosenCode = validLevels[validLevels.length - 1].code;
+      }
+    }
+
+    if (!chosenCode) return;
+
+    if (lastAppliedResVideoId === currentVid && lastAppliedResChoice === chosenCode) {
+      return;
+    }
+
+    try {
+      if (typeof player.setPlaybackQualityRange === "function") {
+        player.setPlaybackQualityRange(chosenCode, chosenCode);
+      }
+      if (typeof player.setPlaybackQuality === "function") {
+        player.setPlaybackQuality(chosenCode);
+      }
+      lastAppliedResVideoId = currentVid;
+      lastAppliedResChoice = chosenCode;
+
+      try {
+        const qualityPref = JSON.stringify({
+          data: chosenCode,
+          expiration: Date.now() + 30 * 24 * 60 * 60 * 1000,
+          creation: Date.now()
+        });
+        window.localStorage.setItem("yt-player-quality", qualityPref);
+      } catch (e) {}
+    } catch (e) {
+      console.warn("[Gacha MV] Failed to set resolution:", e);
     }
   }
 
@@ -1863,6 +1994,7 @@
       if (settings.autoUnmute !== false) {
         attemptAutoUnmute("play-event");
       }
+      applyPreferredResolution("play-event");
     }
   }
 
@@ -1874,6 +2006,7 @@
     if (settings.enabled && settings.autoUnmute !== false) {
       attemptAutoUnmute("setup-listeners");
     }
+    applyPreferredResolution("setup-listeners");
 
     // Initialize Web Audio Booster & Controls
     setupAudioBooster(video);
@@ -1882,6 +2015,12 @@
     // Attach timeupdate for SponsorBlock skipping
     video.removeEventListener("timeupdate", handleVideoTimeUpdate);
     video.addEventListener("timeupdate", handleVideoTimeUpdate);
+
+    // Resolution quality listener on metadata load
+    video.removeEventListener("loadedmetadata", handleVideoMetadataForQuality);
+    video.addEventListener("loadedmetadata", handleVideoMetadataForQuality);
+    video.removeEventListener("canplay", handleVideoMetadataForQuality);
+    video.addEventListener("canplay", handleVideoMetadataForQuality);
 
     // Attach metadata and progress listeners for timeline markers
     ["loadedmetadata", "durationchange", "seeked", "progress", "canplay", "playing"].forEach((evt) => {
@@ -2037,6 +2176,7 @@
         nasAutoSync: false,
         volumeBoost: 100,
         autoUnmute: true,
+        preferredResolution: "auto",
         customSkipDb: {},
         ignoredSegments: {},
         retimedSegments: {}
@@ -3210,6 +3350,23 @@
               <input type="checkbox" id="inpageToggleAutoUnmute" class="gacha-inpage-switch" ${settings.autoUnmute !== false ? "checked" : ""}>
             </label>
 
+            <!-- Preferred Resolution -->
+            <div class="gacha-inpage-item">
+              <div class="gacha-inpage-desc">
+                <span class="gacha-inpage-title">📺 Preferred Resolution</span>
+                <span class="gacha-inpage-sub">Auto fallback to highest if not found</span>
+              </div>
+              <select id="inpageSelectResolution" class="gacha-inpage-select">
+                <option value="auto" ${settings.preferredResolution === "auto" ? "selected" : ""}>Auto</option>
+                <option value="1080p" ${settings.preferredResolution === "1080p" ? "selected" : ""}>1080p</option>
+                <option value="720p" ${settings.preferredResolution === "720p" ? "selected" : ""}>720p</option>
+                <option value="480p" ${settings.preferredResolution === "480p" ? "selected" : ""}>480p</option>
+                <option value="360p" ${settings.preferredResolution === "360p" ? "selected" : ""}>360p</option>
+                <option value="240p" ${settings.preferredResolution === "240p" ? "selected" : ""}>240p</option>
+                <option value="144p" ${settings.preferredResolution === "144p" ? "selected" : ""}>144p</option>
+              </select>
+            </div>
+
             <!-- Search Filter Chips -->
             <label class="gacha-inpage-item" for="inpageToggleSearchChips">
               <div class="gacha-inpage-desc">
@@ -3289,6 +3446,7 @@
     const btnNasImport = widget.querySelector("#gachaBtnNasImport");
     const inpageToggleAutoplayGuard = widget.querySelector("#inpageToggleAutoplayGuard");
     const inpageToggleAutoUnmute = widget.querySelector("#inpageToggleAutoUnmute");
+    const inpageSelectResolution = widget.querySelector("#inpageSelectResolution");
     const inpageToggleSearchChips = widget.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = widget.querySelector("#inpageToggleFilterOfficial");
 
@@ -3619,6 +3777,17 @@
       });
     }
 
+    if (inpageSelectResolution) {
+      inpageSelectResolution.addEventListener("change", async (e) => {
+        const newRes = e.target.value;
+        await chrome.storage.local.set({ preferredResolution: newRes });
+        settings.preferredResolution = newRes;
+        lastAppliedResChoice = "";
+        applyPreferredResolution("drawer-change");
+        showToast(`📺 Resolution: ${newRes === "auto" ? "Auto" : newRes}`);
+      });
+    }
+
     if (inpageToggleSearchChips) {
       inpageToggleSearchChips.addEventListener("change", async (e) => {
         await chrome.storage.local.set({ showSearchChips: e.target.checked });
@@ -3741,6 +3910,7 @@
     const inpageToggleNasAutoSync = document.querySelector("#inpageToggleNasAutoSync");
     const inpageToggleAutoplayGuard = document.querySelector("#inpageToggleAutoplayGuard");
     const inpageToggleAutoUnmute = document.querySelector("#inpageToggleAutoUnmute");
+    const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
     const inpageToggleSearchChips = document.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = document.querySelector("#inpageToggleFilterOfficial");
     const statusText = document.querySelector("#gachaPanelSkipperStatus");
@@ -3761,6 +3931,7 @@
     if (inpageToggleNasAutoSync) inpageToggleNasAutoSync.checked = settings.nasAutoSync;
     if (inpageToggleAutoplayGuard) inpageToggleAutoplayGuard.checked = settings.autoplayGuard;
     if (inpageToggleAutoUnmute) inpageToggleAutoUnmute.checked = settings.autoUnmute !== false;
+    if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
     if (inpageToggleSearchChips) inpageToggleSearchChips.checked = settings.showSearchChips;
     if (inpageToggleFilterOfficial) inpageToggleFilterOfficial.checked = settings.filterOfficialVideos;
 
@@ -4209,7 +4380,8 @@
         "nasAuthToken",
         "nasAutoSync",
         "volumeBoost",
-        "autoUnmute"
+        "autoUnmute",
+        "preferredResolution"
       ]) {
         if (changes[key] !== undefined) {
           settings[key] = changes[key].newValue;
@@ -4218,6 +4390,12 @@
       }
       if (changes.autoUnmute !== undefined && changes.autoUnmute.newValue) {
         attemptAutoUnmute("storage-enabled");
+      }
+      if (changes.preferredResolution !== undefined) {
+        lastAppliedResChoice = "";
+        applyPreferredResolution("storage-changed");
+        const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
+        if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
       }
       if (changes.volumeBoost !== undefined) {
         applyVolumeBoostGain();
@@ -4355,7 +4533,7 @@
     lastNavigationHref = window.location.href;
 
     // Follow-up retries as new page components mount and populate
-    [300, 800, 1500].forEach((delay) => {
+    [300, 800, 1500, 2500].forEach((delay) => {
       setTimeout(() => {
         if (settings.enabled) {
           applyFeatures();
@@ -4363,6 +4541,7 @@
           if (settings.autoUnmute !== false) {
             attemptAutoUnmute("navigation-delay");
           }
+          applyPreferredResolution("navigation-delay");
         }
       }, delay);
     });
