@@ -145,7 +145,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             resp = {
                 "status": "online",
                 "service": "Gacha MV Player Python NAS Server",
-                "version": "1.0.2",
+                "version": "1.0.3",
                 "videoCount": len(db),
                 "totalSegments": total_segments
             }

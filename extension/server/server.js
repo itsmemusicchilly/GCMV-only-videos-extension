@@ -159,7 +159,7 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         status: "online",
         service: "Gacha MV Player NAS Database Server",
-        version: "1.0.2",
+        version: "1.0.3",
         videoCount: videoCount,
         totalSegments: totalSegments,
         timestamp: new Date().toISOString()
