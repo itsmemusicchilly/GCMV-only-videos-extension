@@ -1,0 +1,24 @@
+# Android build artifacts
+.gradle/
+build/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.idsig
+
+# Keys and certificates
+*.pem
+*.keystore
+*.jks
+!debug.keystore
+
+# Packages
+extension.crx
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/

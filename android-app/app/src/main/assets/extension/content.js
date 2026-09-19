@@ -782,9 +782,18 @@
       window.removeEventListener("keydown", onUserGesture, true);
       gestureUnmuteArmed = false;
 
-      setTimeout(() => {
-        attemptAutoUnmute("user-gesture");
-      }, 60);
+      // Programmatically unmute immediately during user activation without dispatching synthetic clicks
+      const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+      const player = document.getElementById("movie_player");
+      if (video && video.muted) {
+        try { video.muted = false; } catch (e) {}
+      }
+      if (player && typeof player.unMute === "function") {
+        try { player.unMute(); } catch (e) {}
+      }
+      if (player && typeof player.setVolume === "function" && typeof player.getVolume === "function" && player.getVolume() === 0) {
+        try { player.setVolume(100); } catch (e) {}
+      }
     };
 
     window.addEventListener("pointerdown", onUserGesture, { capture: true, once: true });
@@ -801,16 +810,6 @@
     if (userManuallyMutedForVideoId && userManuallyMutedForVideoId === currentVid) {
       return;
     }
-
-    // Auto-click YouTube "Tap to unmute" overlays / buttons if present
-    const unmuteOverlays = document.querySelectorAll(
-      ".ytp-unmute, .player-unmute, button.ytp-unmute-button, .ytm-unmute, button[aria-label*='unmute' i], [title*='unmute' i]"
-    );
-    unmuteOverlays.forEach((btn) => {
-      if (typeof btn.click === "function") {
-        try { btn.click(); } catch (e) {}
-      }
-    });
 
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     const player = document.getElementById("movie_player");
@@ -829,8 +828,27 @@
         } catch (e) {}
       }
 
+      if (player && typeof player.setVolume === "function" && typeof player.getVolume === "function" && player.getVolume() === 0) {
+        try {
+          player.setVolume(100);
+        } catch (e) {}
+      }
+
+      // Check if floating overlay on mobile / embed needs to be clicked (never click desktop player bar buttons!)
       const isStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
-      if (!isStillMuted) {
+      if (isStillMuted) {
+        const mobileUnmuteOverlays = document.querySelectorAll(
+          ".ytp-unmute:not(.ytp-mute-button), .player-unmute, .ytm-unmute"
+        );
+        mobileUnmuteOverlays.forEach((btn) => {
+          if (typeof btn.click === "function") {
+            try { btn.click(); } catch (e) {}
+          }
+        });
+      }
+
+      const isReallyStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+      if (!isReallyStillMuted) {
         const now = Date.now();
         if (lastAutoUnmutedVideoId !== currentVid || now - lastAutoUnmuteToastTime > 6000) {
           lastAutoUnmuteToastTime = now;
@@ -861,17 +879,179 @@
 
   let lastAppliedResVideoId = "";
   let lastAppliedResChoice = "";
+  let isAutomatingQuality = false;
+
+  function switchQualityViaMenu(targetHeight, chosenCode) {
+    if (isAutomatingQuality || wasAdPlaying) return;
+    const settingsBtn = document.querySelector(".ytp-settings-button");
+    if (!settingsBtn) return;
+
+    // Do not interfere if user is currently looking at the settings menu
+    if (settingsBtn.getAttribute("aria-expanded") === "true") return;
+
+    isAutomatingQuality = true;
+
+    // Temporarily hide menu to prevent visual blink
+    let menu = document.querySelector(".ytp-popup.ytp-settings-menu, .ytp-settings-menu");
+    const origOpacity = menu ? menu.style.opacity : "";
+    const origTransition = menu ? menu.style.transition : "";
+    if (menu) {
+      menu.style.opacity = "0";
+      menu.style.transition = "none";
+    }
+
+    try {
+      // 1. Open settings menu
+      settingsBtn.click();
+      menu = document.querySelector(".ytp-popup.ytp-settings-menu, .ytp-settings-menu");
+      if (menu) {
+        menu.style.opacity = "0";
+        menu.style.transition = "none";
+      }
+
+      // 2. Find Quality menuitem
+      const menuItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-panel-menu .ytp-menuitem"));
+      let qualityItem = null;
+      for (const item of menuItems) {
+        const label = (item.querySelector(".ytp-menuitem-label")?.textContent || item.textContent || "").toLowerCase();
+        const content = (item.querySelector(".ytp-menuitem-content")?.textContent || "").toLowerCase();
+        if (
+          label.includes("quality") ||
+          label.includes("calidad") ||
+          label.includes("qualité") ||
+          label.includes("qualität") ||
+          label.includes("qualità") ||
+          label.includes("qualidade") ||
+          label.includes("画质") ||
+          label.includes("畫質") ||
+          label.includes("画質") ||
+          label.includes("화질") ||
+          label.includes("качество") ||
+          /\d+p|auto/i.test(content)
+        ) {
+          qualityItem = item;
+          break;
+        }
+      }
+
+      if (!qualityItem && menuItems.length > 0) {
+        qualityItem = menuItems.find((it) => /\d+p/i.test(it.textContent || ""));
+      }
+
+      if (!qualityItem) {
+        if (settingsBtn.getAttribute("aria-expanded") === "true") {
+          settingsBtn.click();
+        }
+        if (menu) {
+          menu.style.opacity = origOpacity;
+          menu.style.transition = origTransition;
+        }
+        isAutomatingQuality = false;
+        return;
+      }
+
+      // 3. Click Quality menuitem to open resolutions sub-menu
+      qualityItem.click();
+
+      setTimeout(() => {
+        try {
+          const subMenuItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-panel-menu .ytp-menuitem"));
+          if (subMenuItems.length === 0) {
+            if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
+            if (menu) {
+              menu.style.opacity = origOpacity;
+              menu.style.transition = origTransition;
+            }
+            isAutomatingQuality = false;
+            return;
+          }
+
+          const resOptions = [];
+          for (const item of subMenuItems) {
+            const text = (item.textContent || "").trim();
+            const match = text.match(/(\d+)p/i);
+            if (match) {
+              resOptions.push({
+                item,
+                height: parseInt(match[1], 10),
+                isPremium: /premium/i.test(text),
+                text
+              });
+            } else if (/auto/i.test(text)) {
+              resOptions.push({
+                item,
+                height: 0,
+                isAuto: true,
+                text
+              });
+            }
+          }
+
+          let chosenItem = null;
+          if (targetHeight === 0) {
+            chosenItem = resOptions.find((o) => o.isAuto)?.item || subMenuItems[subMenuItems.length - 1];
+          } else if (resOptions.length > 0) {
+            const valid = resOptions.filter((o) => o.height > 0);
+            valid.sort((a, b) => b.height - a.height);
+
+            if (valid.length > 0) {
+              const exact = valid.filter((o) => o.height === targetHeight);
+              if (exact.length > 0) {
+                const nonPremium = exact.find((o) => !o.isPremium);
+                chosenItem = nonPremium ? nonPremium.item : exact[0].item;
+              } else if (targetHeight >= valid[0].height) {
+                chosenItem = valid[0].item;
+              } else {
+                const below = valid.filter((o) => o.height <= targetHeight);
+                chosenItem = below.length > 0 ? below[0].item : valid[valid.length - 1].item;
+              }
+            }
+          }
+
+          if (chosenItem && typeof chosenItem.click === "function") {
+            chosenItem.click();
+          }
+
+          setTimeout(() => {
+            if (settingsBtn.getAttribute("aria-expanded") === "true") {
+              settingsBtn.click();
+            }
+            if (menu) {
+              menu.style.opacity = origOpacity;
+              menu.style.transition = origTransition;
+            }
+            isAutomatingQuality = false;
+          }, 40);
+        } catch (err) {
+          if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
+          if (menu) {
+            menu.style.opacity = origOpacity;
+            menu.style.transition = origTransition;
+          }
+          isAutomatingQuality = false;
+        }
+      }, 50);
+    } catch (e) {
+      if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
+      if (menu) {
+        menu.style.opacity = origOpacity;
+        menu.style.transition = origTransition;
+      }
+      isAutomatingQuality = false;
+    }
+  }
 
   function handleVideoMetadataForQuality() {
     applyPreferredResolution("metadata-loaded");
   }
 
   function applyPreferredResolution(reason = "") {
-    if (!settings.enabled) return;
+    if (!settings.enabled || wasAdPlaying) return;
     const target = (settings.preferredResolution || "auto").toLowerCase().trim();
     const currentVid = getCurrentVideoId();
 
     const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     if (!player) return;
 
     if (target === "auto") {
@@ -890,6 +1070,13 @@
     const targetHeight = parseInt(target, 10);
     if (isNaN(targetHeight)) return;
 
+    // Fast path: if video is already running at the desired height, no action needed
+    if (video && video.videoHeight && video.videoHeight === targetHeight) {
+      lastAppliedResVideoId = currentVid;
+      lastAppliedResChoice = `${targetHeight}p`;
+      return;
+    }
+
     let levels = [];
     if (typeof player.getAvailableQualityLevels === "function") {
       try {
@@ -902,75 +1089,65 @@
       } catch (e) {}
     }
 
-    if (!Array.isArray(levels) || levels.length === 0) return;
-
     const validLevels = [];
-    levels.forEach((lvl) => {
-      if (!lvl || lvl === "auto") return;
-      const code = typeof lvl === "string" ? lvl : (lvl.quality || "");
-      if (!code || code === "auto") return;
-      let height = QUALITY_HEIGHT_MAP[code];
-      if (!height) {
-        const match = String(code).match(/(\d+)/);
-        if (match) height = parseInt(match[1], 10);
-      }
-      if (height && !isNaN(height)) {
-        if (!validLevels.some((item) => item.code === code)) {
-          validLevels.push({ code, height });
+    if (Array.isArray(levels)) {
+      levels.forEach((lvl) => {
+        if (!lvl || lvl === "auto") return;
+        const code = typeof lvl === "string" ? lvl : (lvl.quality || "");
+        if (!code || code === "auto") return;
+        let height = QUALITY_HEIGHT_MAP[code];
+        if (!height) {
+          const match = String(code).match(/(\d+)/);
+          if (match) height = parseInt(match[1], 10);
         }
-      }
-    });
-
-    if (validLevels.length === 0) return;
-
-    // Sort descending: highest resolution first
-    validLevels.sort((a, b) => b.height - a.height);
+        if (height && !isNaN(height)) {
+          if (!validLevels.some((item) => item.code === code)) {
+            validLevels.push({ code, height });
+          }
+        }
+      });
+    }
 
     let chosenCode = "";
-    // 1. Exact match
-    const exact = validLevels.find((l) => l.height === targetHeight);
-    if (exact) {
-      chosenCode = exact.code;
-    } else if (targetHeight >= validLevels[0].height) {
-      // 2. Target is higher than highest available -> choose highest
-      chosenCode = validLevels[0].code;
-    } else {
-      // 3. Target is lower than highest, find highest available <= targetHeight
-      const below = validLevels.filter((l) => l.height <= targetHeight);
-      if (below.length > 0) {
-        chosenCode = below[0].code;
+    if (validLevels.length > 0) {
+      validLevels.sort((a, b) => b.height - a.height);
+      const exact = validLevels.find((l) => l.height === targetHeight);
+      if (exact) {
+        chosenCode = exact.code;
+      } else if (targetHeight >= validLevels[0].height) {
+        chosenCode = validLevels[0].code;
       } else {
-        chosenCode = validLevels[validLevels.length - 1].code;
+        const below = validLevels.filter((l) => l.height <= targetHeight);
+        chosenCode = below.length > 0 ? below[0].code : validLevels[validLevels.length - 1].code;
       }
     }
 
-    if (!chosenCode) return;
-
-    if (lastAppliedResVideoId === currentVid && lastAppliedResChoice === chosenCode) {
+    if (lastAppliedResVideoId === currentVid && lastAppliedResChoice === (chosenCode || `${targetHeight}p`)) {
       return;
     }
 
     try {
-      if (typeof player.setPlaybackQualityRange === "function") {
+      if (chosenCode && typeof player.setPlaybackQualityRange === "function") {
         player.setPlaybackQualityRange(chosenCode, chosenCode);
       }
-      if (typeof player.setPlaybackQuality === "function") {
+      if (chosenCode && typeof player.setPlaybackQuality === "function") {
         player.setPlaybackQuality(chosenCode);
       }
-      lastAppliedResVideoId = currentVid;
-      lastAppliedResChoice = chosenCode;
-
       try {
         const qualityPref = JSON.stringify({
-          data: chosenCode,
+          data: chosenCode || `hd${targetHeight}`,
           expiration: Date.now() + 30 * 24 * 60 * 60 * 1000,
           creation: Date.now()
         });
         window.localStorage.setItem("yt-player-quality", qualityPref);
       } catch (e) {}
-    } catch (e) {
-      console.warn("[Gacha MV] Failed to set resolution:", e);
-    }
+    } catch (e) {}
+
+    lastAppliedResVideoId = currentVid;
+    lastAppliedResChoice = chosenCode || `${targetHeight}p`;
+
+    // Modern YouTube DASH streaming requires DOM-based quality menu automation
+    switchQualityViaMenu(targetHeight, chosenCode);
   }
 
   // ==========================================================
@@ -1038,7 +1215,7 @@
 
     // Fast-path: When no ad is playing and wasn't playing, skip all heavy DOM queries
     if (!isAdActive && !wasAdPlaying) {
-      if (document.querySelector("tp-yt-iron-overlay-backdrop, ytd-enforcement-message-view-model")) {
+      if (document.querySelector("ytd-enforcement-message-view-model, yt-playability-error-supported-renderers:has(ytd-enforcement-message-view-model)")) {
         dismissEnforcementModals();
       }
       return;
@@ -1201,19 +1378,23 @@
     if (now - lastStillWatchingDismissAt < 400) return;
 
     const dialogs = document.querySelectorAll(
-      "yt-confirm-dialog-renderer, ytm-confirmation-dialog-renderer, ytm-confirm-dialog-renderer, ytd-modal-with-title-and-button-renderer, ytm-modal-with-title-and-button-renderer, tp-yt-paper-dialog, .ytp-popup.ytp-confirm-dialog, [role='dialog']"
+      "yt-confirm-dialog-renderer, ytm-confirmation-dialog-renderer, ytm-confirm-dialog-renderer, ytd-modal-with-title-and-button-renderer, ytm-modal-with-title-and-button-renderer, .ytp-popup.ytp-confirm-dialog, tp-yt-paper-dialog.ytd-popup-container"
     );
 
     let dismissed = false;
     dialogs.forEach((dialog) => {
-      if (dismissed || !isUsableOverlay(dialog) || !textLooksLikeStillWatching(dialog.textContent)) return;
+      if (dismissed || !isUsableOverlay(dialog)) return;
+      if (dialog.closest(".ytp-settings-menu, #gacha-floating-widget, #gachaJukeboxPanel")) return;
+      if (!textLooksLikeStillWatching(dialog.textContent)) return;
       if (clickStillWatchingConfirm(dialog)) dismissed = true;
     });
 
     if (dismissed) {
       lastStillWatchingDismissAt = now;
       document.querySelectorAll("tp-yt-iron-overlay-backdrop, ytm-popup-container .overlay-backdrop").forEach((backdrop) => {
-        if (isUsableOverlay(backdrop)) backdrop.remove();
+        if (isUsableOverlay(backdrop) && !backdrop.closest("#gacha-floating-widget, #gachaJukeboxPanel")) {
+          backdrop.remove();
+        }
       });
       resumeMainVideo();
     }
@@ -3577,13 +3758,20 @@
       );
     }
 
-    document.addEventListener("click", (e) => {
-      const widgetEl = document.getElementById("gacha-floating-widget");
-      const p = document.getElementById("gachaJukeboxPanel");
-      if (jukeboxPanelOpen && widgetEl && p && !widgetEl.contains(e.target)) {
-        closePanel();
-      }
-    });
+    if (!window.__gachaJukeboxOutsideClickAttached__) {
+      window.__gachaJukeboxOutsideClickAttached__ = true;
+      document.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        const widgetEl = document.getElementById("gacha-floating-widget");
+        const p = document.getElementById("gachaJukeboxPanel");
+        const bd = document.getElementById("gacha-drawer-backdrop");
+        if (jukeboxPanelOpen && widgetEl && p) {
+          if (!widgetEl.contains(e.target) && e.target !== bd) {
+            closePanel();
+          }
+        }
+      });
+    }
 
     function setTab(tabName) {
       activePanelTab = tabName;
