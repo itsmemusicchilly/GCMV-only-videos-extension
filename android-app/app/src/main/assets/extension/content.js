@@ -976,13 +976,45 @@
 
           // 4. Poll for resolution sub-panel options
           let subAttempts = 0;
+          let clickedAdvanced = false;
           const subInterval = setInterval(() => {
             subAttempts++;
 
-            const allItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-menuitem"));
-            const resOptions = [];
+            // Isolate submenu items: prefer [role="menuitemradio"], fallback to non-popup items in last panel
+            let subItems = Array.from(document.querySelectorAll(".ytp-settings-menu [role='menuitemradio']"));
+            if (subItems.length === 0) {
+              const panels = document.querySelectorAll(".ytp-settings-menu .ytp-panel");
+              if (panels.length > 1) {
+                subItems = Array.from(panels[panels.length - 1].querySelectorAll(".ytp-menuitem:not([aria-haspopup='true'])"));
+              }
+            }
 
-            for (const item of allItems) {
+            // Check for intermediate "Advanced" menu item on mobile/new YouTube layouts
+            if (!clickedAdvanced && subItems.length > 0 && !subItems.some((el) => /\b\d{3,4}p\b|4k|2k/i.test(el.textContent || ""))) {
+              const advItem = subItems.find((el) => {
+                const t = (el.textContent || "").toLowerCase();
+                return (
+                  t.includes("advanced") ||
+                  t.includes("avanzada") ||
+                  t.includes("avancée") ||
+                  t.includes("erweitert") ||
+                  t.includes("avanzate") ||
+                  t.includes("avançado") ||
+                  t.includes("高级") ||
+                  t.includes("高級") ||
+                  t.includes("詳細設定") ||
+                  t.includes("고급")
+                );
+              });
+              if (advItem) {
+                clickedAdvanced = true;
+                advItem.click();
+                return;
+              }
+            }
+
+            const resOptions = [];
+            for (const item of subItems) {
               const text = (item.textContent || "").trim();
               let height = 0;
               const pMatch = text.match(/(\d{3,4})p/i);
@@ -1016,6 +1048,7 @@
 
               const valid = resOptions.filter((o) => o.height > 0);
               let chosenItem = null;
+              let fallbackNotice = "";
 
               if (targetHeight === 0) {
                 // Auto requested
@@ -1024,14 +1057,17 @@
                 // Sort descending: highest resolution first (2160, 1440, 1080, 720, ...)
                 valid.sort((a, b) => b.height - a.height);
 
-                // 1. Exact match (prefer standard over premium if both exist)
+                // 1. Exact match (prefer Premium over standard if available per user choice)
                 const exact = valid.filter((o) => o.height === targetHeight);
                 if (exact.length > 0) {
-                  const nonPrem = exact.find((o) => !o.isPremium);
-                  chosenItem = nonPrem ? nonPrem.item : exact[0].item;
+                  const prem = exact.find((o) => o.isPremium);
+                  chosenItem = prem ? prem.item : exact[0].item;
                 } else if (targetHeight >= valid[0].height) {
-                  // 2. Target higher than highest available -> choose highest available!
+                  // 2. Target higher than highest available -> choose highest available! (e.g. 4K requested, max 720p)
                   chosenItem = valid[0].item;
+                  if (valid[0].height < targetHeight) {
+                    fallbackNotice = `📺 ${valid[0].height}p (Max available)`;
+                  }
                 } else {
                   // 3. Target lower than highest -> choose highest available <= targetHeight
                   const below = valid.filter((o) => o.height <= targetHeight);
@@ -1041,9 +1077,12 @@
 
               if (chosenItem && typeof chosenItem.click === "function") {
                 chosenItem.click();
+                if (fallbackNotice) {
+                  showToast(fallbackNotice);
+                }
               }
 
-              setTimeout(cleanup, 50);
+              setTimeout(cleanup, 60);
             }
           }, 25);
         }
