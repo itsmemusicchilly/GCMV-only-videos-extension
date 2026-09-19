@@ -911,6 +911,19 @@
     }
   }
 
+  function simulateClick(element) {
+    if (!element) return;
+    try {
+      element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
+      element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, view: window }));
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      element.click();
+    } catch (e) {
+      try { element.click(); } catch (err) {}
+    }
+  }
+
   function switchQualityViaMenu(targetHeight) {
     if (isAutomatingQuality || wasAdPlaying) return;
     const settingsBtn = document.querySelector(".ytp-settings-button");
@@ -1016,6 +1029,21 @@
             const resOptions = [];
             for (const item of subItems) {
               const text = (item.textContent || "").trim();
+
+              // CRITICAL: Auto must be identified first! YouTube displays "Auto (1080p HD)" or "Auto (720p)"
+              // which contains resolution numbers like 1080p, but represents the Auto setting.
+              const isAuto = /auto|automático|automatique|automatisch|авто/i.test(text);
+              if (isAuto) {
+                resOptions.push({
+                  item,
+                  height: 0,
+                  isAuto: true,
+                  isPremium: false,
+                  text
+                });
+                continue;
+              }
+
               let height = 0;
               const pMatch = text.match(/(\d{3,4})p/i);
               if (pMatch) {
@@ -1033,13 +1061,6 @@
                   isPremium: /premium/i.test(text),
                   text
                 });
-              } else if (/auto/i.test(text)) {
-                resOptions.push({
-                  item,
-                  height: 0,
-                  isAuto: true,
-                  text
-                });
               }
             }
 
@@ -1048,6 +1069,7 @@
 
               const valid = resOptions.filter((o) => o.height > 0);
               let chosenItem = null;
+              let chosenHeight = 0;
               let fallbackNotice = "";
 
               if (targetHeight === 0) {
@@ -1055,28 +1077,42 @@
                 chosenItem = resOptions.find((o) => o.isAuto)?.item || null;
               } else if (valid.length > 0) {
                 // Sort descending: highest resolution first (2160, 1440, 1080, 720, ...)
-                valid.sort((a, b) => b.height - a.height);
+                // Prioritize Premium when heights are equal (e.g. 1080p Premium vs standard 1080p)
+                valid.sort((a, b) => {
+                  if (b.height !== a.height) return b.height - a.height;
+                  if (a.isPremium && !b.isPremium) return -1;
+                  if (!a.isPremium && b.isPremium) return 1;
+                  return 0;
+                });
 
                 // 1. Exact match (prefer Premium over standard if available per user choice)
                 const exact = valid.filter((o) => o.height === targetHeight);
                 if (exact.length > 0) {
                   const prem = exact.find((o) => o.isPremium);
-                  chosenItem = prem ? prem.item : exact[0].item;
+                  const selected = prem || exact[0];
+                  chosenItem = selected.item;
+                  chosenHeight = selected.height;
                 } else if (targetHeight >= valid[0].height) {
-                  // 2. Target higher than highest available -> choose highest available! (e.g. 4K requested, max 720p)
+                  // 2. Target higher than highest available -> choose highest available! (e.g. 4K requested, max 1080p)
                   chosenItem = valid[0].item;
+                  chosenHeight = valid[0].height;
                   if (valid[0].height < targetHeight) {
                     fallbackNotice = `📺 ${valid[0].height}p (Max available)`;
                   }
                 } else {
                   // 3. Target lower than highest -> choose highest available <= targetHeight
                   const below = valid.filter((o) => o.height <= targetHeight);
-                  chosenItem = below.length > 0 ? below[0].item : valid[valid.length - 1].item;
+                  const selected = below.length > 0 ? below[0] : valid[valid.length - 1];
+                  chosenItem = selected.item;
+                  chosenHeight = selected.height;
                 }
               }
 
-              if (chosenItem && typeof chosenItem.click === "function") {
-                chosenItem.click();
+              if (chosenItem) {
+                simulateClick(chosenItem);
+                if (chosenHeight > 0) {
+                  lastAppliedResChoice = `${chosenHeight}p`;
+                }
                 if (fallbackNotice) {
                   showToast(fallbackNotice);
                 }
