@@ -337,7 +337,6 @@ public class MainActivity extends AppCompatActivity {
                     break;
                 }
             }
-            spResolution.setSelection(selectedIndex, false);
 
             final boolean[] isResFirstCall = {true};
             spResolution.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -357,7 +356,11 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onNothingSelected(AdapterView<?> parent) {}
             });
+            // Set selection AFTER attaching listener so the first-call guard is always active
+            // when onItemSelected fires synchronously on some Android versions
+            spResolution.setSelection(selectedIndex, false);
         }
+
 
         autoSaveSetting(swFilterOfficial, "filterOfficialVideos", null);
         autoSaveSetting(swSkipNonMusic, "skipNonMusic", null);
@@ -922,6 +925,26 @@ public class MainActivity extends AppCompatActivity {
                     view.evaluateJavascript(
                         "(function() {\n" +
                         "  if (window.__gachaMvReinit) window.__gachaMvReinit();\n" +
+                        "})();",
+                        null
+                    );
+                    // Auto-play recovery: if the video is paused and the user did not manually pause it,
+                    // tap the play button so the next song auto-starts cleanly
+                    view.evaluateJavascript(
+                        "(function() {\n" +
+                        "  try {\n" +
+                        "    var vid = document.querySelector('video.html5-main-video') || document.querySelector('video');\n" +
+                        "    if (!vid || !vid.paused || vid.ended || vid.readyState < 2) return;\n" +
+                        "    // Only auto-play on watch pages\n" +
+                        "    if (!window.location.pathname.startsWith('/watch') && !window.location.pathname.startsWith('/shorts')) return;\n" +
+                        "    // Don't interfere if user manually paused (respect existing flag in content.js)\n" +
+                        "    if (window.__gachaUserManuallyPaused) return;\n" +
+                        "    vid.play().catch(function() {\n" +
+                        "      // Fallback: tap the player play button\n" +
+                        "      var btn = document.querySelector('.ytp-play-button, .player-controls-play-pause, [data-testid=\"play-button\"]');\n" +
+                        "      if (btn) btn.click();\n" +
+                        "    });\n" +
+                        "  } catch(e) {}\n" +
                         "})();",
                         null
                     );

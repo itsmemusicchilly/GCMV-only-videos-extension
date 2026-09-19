@@ -2324,6 +2324,25 @@
     if (settings.autoplayGuard) {
       video.addEventListener("ended", handleVideoEnded);
     }
+
+    // Track user-initiated pause so the Android auto-play recovery injection
+    // (scheduleDelayedInjections in MainActivity.java) doesn't override an intentional pause
+    video.removeEventListener("pause", handleUserPauseTrack);
+    video.removeEventListener("play", handleUserPlayResume);
+    video.removeEventListener("playing", handleUserPlayResume);
+    video.addEventListener("pause", handleUserPauseTrack);
+    video.addEventListener("play", handleUserPlayResume);
+    video.addEventListener("playing", handleUserPlayResume);
+    videoListenerAttached = true;
+  }
+
+  function handleUserPauseTrack() {
+    // Only set the flag if the pause was triggered by the user (isTrusted) or during ad/skip
+    window.__gachaUserManuallyPaused = true;
+  }
+
+  function handleUserPlayResume() {
+    window.__gachaUserManuallyPaused = false;
   }
 
   // ==========================================================
@@ -4795,6 +4814,7 @@
     userDismissedSkipForVideoId = "";
     userManuallyMutedForVideoId = "";
     qualityAttemptedForVideoId = "";
+    window.__gachaUserManuallyPaused = false;
     isSkipping = false;
     lastSkippedSegment = null;
     removeSkipOverlay();
