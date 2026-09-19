@@ -864,180 +864,192 @@
   // ==========================================================
   // Preferred Video Resolution Engine
   // ==========================================================
+  // ==========================================================
+  // Preferred Video Resolution Engine
+  // ==========================================================
   const QUALITY_HEIGHT_MAP = {
     highres: 4320,
     hd2880: 2880,
     hd2160: 2160,
+    "4k": 2160,
+    "2160p": 2160,
     hd1440: 1440,
+    "2k": 1440,
+    "1440p": 1440,
     hd1080: 1080,
+    "1080p": 1080,
     hd720: 720,
+    "720p": 720,
     large: 480,
+    "480p": 480,
     medium: 360,
+    "360p": 360,
     small: 240,
-    tiny: 144
+    "240p": 240,
+    tiny: 144,
+    "144p": 144
   };
 
   let lastAppliedResVideoId = "";
   let lastAppliedResChoice = "";
+  let qualityAttemptedForVideoId = "";
   let isAutomatingQuality = false;
 
-  function switchQualityViaMenu(targetHeight, chosenCode) {
+  function ensureStealthQualityStyle() {
+    if (!document.getElementById("gacha-quality-stealth-style")) {
+      const s = document.createElement("style");
+      s.id = "gacha-quality-stealth-style";
+      s.textContent = `
+        .gacha-stealth-quality-active .ytp-popup.ytp-settings-menu,
+        .gacha-stealth-quality-active .ytp-settings-menu {
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: auto !important;
+        }
+      `;
+      (document.head || document.documentElement).appendChild(s);
+    }
+  }
+
+  function switchQualityViaMenu(targetHeight) {
     if (isAutomatingQuality || wasAdPlaying) return;
     const settingsBtn = document.querySelector(".ytp-settings-button");
-    if (!settingsBtn) return;
+    const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (!settingsBtn || !player) return;
 
     // Do not interfere if user is currently looking at the settings menu
     if (settingsBtn.getAttribute("aria-expanded") === "true") return;
 
     isAutomatingQuality = true;
+    ensureStealthQualityStyle();
+    player.classList.add("gacha-stealth-quality-active");
 
-    // Temporarily hide menu to prevent visual blink
-    let menu = document.querySelector(".ytp-popup.ytp-settings-menu, .ytp-settings-menu");
-    const origOpacity = menu ? menu.style.opacity : "";
-    const origTransition = menu ? menu.style.transition : "";
-    if (menu) {
-      menu.style.opacity = "0";
-      menu.style.transition = "none";
-    }
+    const cleanup = () => {
+      if (settingsBtn.getAttribute("aria-expanded") === "true") {
+        settingsBtn.click();
+      }
+      player.classList.remove("gacha-stealth-quality-active");
+      isAutomatingQuality = false;
+    };
 
     try {
       // 1. Open settings menu
       settingsBtn.click();
-      menu = document.querySelector(".ytp-popup.ytp-settings-menu, .ytp-settings-menu");
-      if (menu) {
-        menu.style.opacity = "0";
-        menu.style.transition = "none";
-      }
 
-      // 2. Find Quality menuitem
-      const menuItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-panel-menu .ytp-menuitem"));
-      let qualityItem = null;
-      for (const item of menuItems) {
-        const label = (item.querySelector(".ytp-menuitem-label")?.textContent || item.textContent || "").toLowerCase();
-        const content = (item.querySelector(".ytp-menuitem-content")?.textContent || "").toLowerCase();
-        if (
-          label.includes("quality") ||
-          label.includes("calidad") ||
-          label.includes("qualité") ||
-          label.includes("qualität") ||
-          label.includes("qualità") ||
-          label.includes("qualidade") ||
-          label.includes("画质") ||
-          label.includes("畫質") ||
-          label.includes("画質") ||
-          label.includes("화질") ||
-          label.includes("качество") ||
-          /\d+p|auto/i.test(content)
-        ) {
-          qualityItem = item;
-          break;
+      // 2. Poll for main settings menu items
+      let openAttempts = 0;
+      const openInterval = setInterval(() => {
+        openAttempts++;
+        const menuItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-menuitem"));
+        let qualityItem = null;
+
+        for (const item of menuItems) {
+          const text = (item.textContent || "").toLowerCase();
+          if (
+            text.includes("quality") ||
+            text.includes("calidad") ||
+            text.includes("qualité") ||
+            text.includes("qualität") ||
+            text.includes("qualità") ||
+            text.includes("qualidade") ||
+            text.includes("画质") ||
+            text.includes("畫質") ||
+            text.includes("画質") ||
+            text.includes("화질") ||
+            text.includes("качество") ||
+            /\b\d{3,4}p\b/i.test(text)
+          ) {
+            qualityItem = item;
+            break;
+          }
         }
-      }
 
-      if (!qualityItem && menuItems.length > 0) {
-        qualityItem = menuItems.find((it) => /\d+p/i.test(it.textContent || ""));
-      }
-
-      if (!qualityItem) {
-        if (settingsBtn.getAttribute("aria-expanded") === "true") {
-          settingsBtn.click();
-        }
-        if (menu) {
-          menu.style.opacity = origOpacity;
-          menu.style.transition = origTransition;
-        }
-        isAutomatingQuality = false;
-        return;
-      }
-
-      // 3. Click Quality menuitem to open resolutions sub-menu
-      qualityItem.click();
-
-      setTimeout(() => {
-        try {
-          const subMenuItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-panel-menu .ytp-menuitem"));
-          if (subMenuItems.length === 0) {
-            if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
-            if (menu) {
-              menu.style.opacity = origOpacity;
-              menu.style.transition = origTransition;
-            }
-            isAutomatingQuality = false;
+        if (qualityItem || openAttempts >= 12) {
+          clearInterval(openInterval);
+          if (!qualityItem) {
+            cleanup();
             return;
           }
 
-          const resOptions = [];
-          for (const item of subMenuItems) {
-            const text = (item.textContent || "").trim();
-            const match = text.match(/(\d+)p/i);
-            if (match) {
-              resOptions.push({
-                item,
-                height: parseInt(match[1], 10),
-                isPremium: /premium/i.test(text),
-                text
-              });
-            } else if (/auto/i.test(text)) {
-              resOptions.push({
-                item,
-                height: 0,
-                isAuto: true,
-                text
-              });
-            }
-          }
+          // 3. Click Quality menuitem to open resolutions sub-panel
+          qualityItem.click();
 
-          let chosenItem = null;
-          if (targetHeight === 0) {
-            chosenItem = resOptions.find((o) => o.isAuto)?.item || subMenuItems[subMenuItems.length - 1];
-          } else if (resOptions.length > 0) {
-            const valid = resOptions.filter((o) => o.height > 0);
-            valid.sort((a, b) => b.height - a.height);
+          // 4. Poll for resolution sub-panel options
+          let subAttempts = 0;
+          const subInterval = setInterval(() => {
+            subAttempts++;
 
-            if (valid.length > 0) {
-              const exact = valid.filter((o) => o.height === targetHeight);
-              if (exact.length > 0) {
-                const nonPremium = exact.find((o) => !o.isPremium);
-                chosenItem = nonPremium ? nonPremium.item : exact[0].item;
-              } else if (targetHeight >= valid[0].height) {
-                chosenItem = valid[0].item;
-              } else {
-                const below = valid.filter((o) => o.height <= targetHeight);
-                chosenItem = below.length > 0 ? below[0].item : valid[valid.length - 1].item;
+            const allItems = Array.from(document.querySelectorAll(".ytp-settings-menu .ytp-menuitem"));
+            const resOptions = [];
+
+            for (const item of allItems) {
+              const text = (item.textContent || "").trim();
+              let height = 0;
+              const pMatch = text.match(/(\d{3,4})p/i);
+              if (pMatch) {
+                height = parseInt(pMatch[1], 10);
+              } else if (/\b4k\b/i.test(text)) {
+                height = 2160;
+              } else if (/\b2k\b/i.test(text)) {
+                height = 1440;
+              }
+
+              if (height > 0) {
+                resOptions.push({
+                  item,
+                  height,
+                  isPremium: /premium/i.test(text),
+                  text
+                });
+              } else if (/auto/i.test(text)) {
+                resOptions.push({
+                  item,
+                  height: 0,
+                  isAuto: true,
+                  text
+                });
               }
             }
-          }
 
-          if (chosenItem && typeof chosenItem.click === "function") {
-            chosenItem.click();
-          }
+            if (resOptions.some((o) => o.height > 0) || subAttempts >= 16) {
+              clearInterval(subInterval);
 
-          setTimeout(() => {
-            if (settingsBtn.getAttribute("aria-expanded") === "true") {
-              settingsBtn.click();
+              const valid = resOptions.filter((o) => o.height > 0);
+              let chosenItem = null;
+
+              if (targetHeight === 0) {
+                // Auto requested
+                chosenItem = resOptions.find((o) => o.isAuto)?.item || null;
+              } else if (valid.length > 0) {
+                // Sort descending: highest resolution first (2160, 1440, 1080, 720, ...)
+                valid.sort((a, b) => b.height - a.height);
+
+                // 1. Exact match (prefer standard over premium if both exist)
+                const exact = valid.filter((o) => o.height === targetHeight);
+                if (exact.length > 0) {
+                  const nonPrem = exact.find((o) => !o.isPremium);
+                  chosenItem = nonPrem ? nonPrem.item : exact[0].item;
+                } else if (targetHeight >= valid[0].height) {
+                  // 2. Target higher than highest available -> choose highest available!
+                  chosenItem = valid[0].item;
+                } else {
+                  // 3. Target lower than highest -> choose highest available <= targetHeight
+                  const below = valid.filter((o) => o.height <= targetHeight);
+                  chosenItem = below.length > 0 ? below[0].item : valid[valid.length - 1].item;
+                }
+              }
+
+              if (chosenItem && typeof chosenItem.click === "function") {
+                chosenItem.click();
+              }
+
+              setTimeout(cleanup, 50);
             }
-            if (menu) {
-              menu.style.opacity = origOpacity;
-              menu.style.transition = origTransition;
-            }
-            isAutomatingQuality = false;
-          }, 40);
-        } catch (err) {
-          if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
-          if (menu) {
-            menu.style.opacity = origOpacity;
-            menu.style.transition = origTransition;
-          }
-          isAutomatingQuality = false;
+          }, 25);
         }
-      }, 50);
+      }, 25);
     } catch (e) {
-      if (settingsBtn.getAttribute("aria-expanded") === "true") settingsBtn.click();
-      if (menu) {
-        menu.style.opacity = origOpacity;
-        menu.style.transition = origTransition;
-      }
-      isAutomatingQuality = false;
+      cleanup();
     }
   }
 
@@ -1049,6 +1061,7 @@
     if (!settings.enabled || wasAdPlaying) return;
     const target = (settings.preferredResolution || "auto").toLowerCase().trim();
     const currentVid = getCurrentVideoId();
+    if (!currentVid) return;
 
     const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
@@ -1070,10 +1083,16 @@
     const targetHeight = parseInt(target, 10);
     if (isNaN(targetHeight)) return;
 
-    // Fast path: if video is already running at the desired height, no action needed
+    // Fast path: if video is already running at target height, no action needed
     if (video && video.videoHeight && video.videoHeight === targetHeight) {
       lastAppliedResVideoId = currentVid;
       lastAppliedResChoice = `${targetHeight}p`;
+      return;
+    }
+
+    // Single-attempt per video guard to prevent repeated menu opening loops
+    const isManualChange = reason === "drawer-change" || reason === "popup-change" || reason === "storage-changed" || reason === "user-select";
+    if (!isManualChange && qualityAttemptedForVideoId === currentVid) {
       return;
     }
 
@@ -1135,7 +1154,7 @@
       }
       try {
         const qualityPref = JSON.stringify({
-          data: chosenCode || `hd${targetHeight}`,
+          data: chosenCode || (targetHeight >= 2160 ? "hd2160" : targetHeight >= 1440 ? "hd1440" : `hd${targetHeight}`),
           expiration: Date.now() + 30 * 24 * 60 * 60 * 1000,
           creation: Date.now()
         });
@@ -1143,11 +1162,12 @@
       } catch (e) {}
     } catch (e) {}
 
+    qualityAttemptedForVideoId = currentVid;
     lastAppliedResVideoId = currentVid;
     lastAppliedResChoice = chosenCode || `${targetHeight}p`;
 
     // Modern YouTube DASH streaming requires DOM-based quality menu automation
-    switchQualityViaMenu(targetHeight, chosenCode);
+    switchQualityViaMenu(targetHeight);
   }
 
   // ==========================================================
@@ -3539,6 +3559,8 @@
               </div>
               <select id="inpageSelectResolution" class="gacha-inpage-select">
                 <option value="auto" ${settings.preferredResolution === "auto" ? "selected" : ""}>Auto</option>
+                <option value="2160p" ${settings.preferredResolution === "2160p" ? "selected" : ""}>4K (2160p)</option>
+                <option value="1440p" ${settings.preferredResolution === "1440p" ? "selected" : ""}>1440p (2K)</option>
                 <option value="1080p" ${settings.preferredResolution === "1080p" ? "selected" : ""}>1080p</option>
                 <option value="720p" ${settings.preferredResolution === "720p" ? "selected" : ""}>720p</option>
                 <option value="480p" ${settings.preferredResolution === "480p" ? "selected" : ""}>480p</option>
@@ -3971,6 +3993,7 @@
         await chrome.storage.local.set({ preferredResolution: newRes });
         settings.preferredResolution = newRes;
         lastAppliedResChoice = "";
+        qualityAttemptedForVideoId = "";
         applyPreferredResolution("drawer-change");
         showToast(`📺 Resolution: ${newRes === "auto" ? "Auto" : newRes}`);
       });
@@ -4581,6 +4604,7 @@
       }
       if (changes.preferredResolution !== undefined) {
         lastAppliedResChoice = "";
+        qualityAttemptedForVideoId = "";
         applyPreferredResolution("storage-changed");
         const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
         if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
@@ -4695,6 +4719,7 @@
     videoListenerAttached = false;
     userDismissedSkipForVideoId = "";
     userManuallyMutedForVideoId = "";
+    qualityAttemptedForVideoId = "";
     isSkipping = false;
     lastSkippedSegment = null;
     removeSkipOverlay();

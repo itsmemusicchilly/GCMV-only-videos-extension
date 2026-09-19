@@ -317,8 +317,8 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swAutoUnmute, "autoUnmute", null);
 
         Spinner spResolution = view.findViewById(R.id.spinner_resolution);
-        String[] resDisplayOptions = new String[]{"Auto", "1080p", "720p", "480p", "360p", "240p", "144p"};
-        String[] resValueOptions = new String[]{"auto", "1080p", "720p", "480p", "360p", "240p", "144p"};
+        String[] resDisplayOptions = new String[]{"Auto", "4K (2160p)", "1440p (2K)", "1080p", "720p", "480p", "360p", "240p", "144p"};
+        String[] resValueOptions = new String[]{"auto", "2160p", "1440p", "1080p", "720p", "480p", "360p", "240p", "144p"};
         String preferredRes = sp.getString("preferredResolution", "auto");
 
         if (spResolution != null) {
