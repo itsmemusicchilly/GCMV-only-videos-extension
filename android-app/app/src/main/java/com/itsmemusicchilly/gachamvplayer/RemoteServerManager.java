@@ -542,6 +542,15 @@ public class RemoteServerManager {
         return getQueueArray().toString();
     }
 
+    public synchronized boolean hasQueuedVideo() {
+        return !queue.isEmpty();
+    }
+
+    public synchronized QueueItem peekNextQueuedVideo() {
+        if (queue.isEmpty()) return null;
+        return queue.get(0);
+    }
+
     public synchronized QueueItem popNextQueuedVideo() {
         if (queue.isEmpty()) return null;
         return queue.remove(0);

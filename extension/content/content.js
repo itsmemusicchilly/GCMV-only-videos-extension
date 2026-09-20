@@ -2422,12 +2422,111 @@
     }
   }
 
+  let savedMixContext = null;
+  try {
+    const storedMix = sessionStorage.getItem("gcmv_saved_mix");
+    if (storedMix) savedMixContext = JSON.parse(storedMix);
+  } catch (_) {}
+
+  function hasAnyQueuedVideos() {
+    if (cloudRemoteQueue && cloudRemoteQueue.length > 0) return true;
+    if (window.AndroidBridge && typeof window.AndroidBridge.hasQueuedVideo === "function") {
+      try {
+        return Boolean(window.AndroidBridge.hasQueuedVideo());
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  function captureCurrentMixState() {
+    try {
+      const url = new URL(window.location.href);
+      const listId = url.searchParams.get("list");
+      if (listId && !url.searchParams.get("gcmv_queue")) {
+        let nextVid = "";
+        const nextLink = document.querySelector(
+          "ytm-playlist a[href*='watch?v='], .playlist-items a[href*='watch?v='], ytd-playlist-panel-video-renderer a[href*='watch?v=']"
+        );
+        if (nextLink && nextLink.href) {
+          const m = nextLink.href.match(/(?:v=|\/watch\/)([a-zA-Z0-9_-]{11})/);
+          if (m) nextVid = m[1];
+        }
+        savedMixContext = {
+          listId: listId,
+          lastVideoId: getCurrentVideoId(),
+          nextVideoId: nextVid,
+          savedAt: Date.now()
+        };
+        sessionStorage.setItem("gcmv_saved_mix", JSON.stringify(savedMixContext));
+        console.log("[GCMV] 🎵 Captured Mix state before queue:", savedMixContext);
+      }
+    } catch (e) {
+      console.warn("[GCMV] Error capturing Mix state:", e);
+    }
+  }
+
+  function resumeSavedMix() {
+    if (!savedMixContext || !savedMixContext.listId) return;
+    const mix = { ...savedMixContext };
+    savedMixContext = null;
+    sessionStorage.removeItem("gcmv_saved_mix");
+
+    showToast("🎵 Queue finished: Resuming YouTube Mix 🌸");
+    const targetVid = mix.nextVideoId || mix.lastVideoId || "";
+    const resumeUrl = "https://" + window.location.host + "/watch?v=" + targetVid + "&list=" + mix.listId;
+    if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+      window.AndroidBridge.loadUrl(resumeUrl);
+    } else {
+      window.location.href = resumeUrl;
+    }
+  }
+
+  let isHandlingQueueTransition = false;
+  function checkPreemptiveQueueTransition(video) {
+    if (!video || isHandlingQueueTransition) return;
+    if (!settings.enabled) return;
+
+    if (!hasAnyQueuedVideos()) return;
+
+    const cur = video.currentTime;
+    const dur = video.duration;
+
+    // Trigger pre-emptively when within 0.8s of the end or if ended
+    if (dur > 0 && (cur >= dur - 0.8 || video.ended)) {
+      isHandlingQueueTransition = true;
+      try { video.pause(); } catch (_) {}
+      captureCurrentMixState();
+      checkAndEnforceGachaNext("queue_immediate");
+      setTimeout(() => { isHandlingQueueTransition = false; }, 2500);
+    }
+  }
+
+  function handleVideoTimeUpdateForQueue() {
+    checkPreemptiveQueueTransition(this);
+  }
+
   function handleVideoEnded() {
-    if (!settings.enabled || !settings.autoplayGuard) return;
+    if (!settings.enabled) return;
+
+    // 1. If we have queued videos, play immediately with 0 delay!
+    if (hasAnyQueuedVideos()) {
+      captureCurrentMixState();
+      checkAndEnforceGachaNext("queue_immediate");
+      return;
+    }
+
+    // 2. If queue is empty, check if we have a saved Mix to return to!
+    if (savedMixContext && savedMixContext.listId) {
+      resumeSavedMix();
+      return;
+    }
+
+    // 3. Otherwise standard autoplay guard
+    if (!settings.autoplayGuard) return;
     if (autoplayGuardTimeout) clearTimeout(autoplayGuardTimeout);
     autoplayGuardTimeout = setTimeout(() => {
       checkAndEnforceGachaNext();
-    }, 800);
+    }, 400);
   }
 
   function handleVideoPlayForBooster() {
@@ -2914,11 +3013,13 @@
     video.removeEventListener("loadeddata", handleVideoLoadedDataForBooster);
     video.addEventListener("loadeddata", handleVideoLoadedDataForBooster);
 
-    // Autoplay guard - remove first to avoid duplicate stacked listeners on SPA navigation
+    // Autoplay guard & Queue listener - always listen for ended so queue can pop even if autoplayGuard is off
     video.removeEventListener("ended", handleVideoEnded);
-    if (settings.autoplayGuard) {
-      video.addEventListener("ended", handleVideoEnded);
-    }
+    video.addEventListener("ended", handleVideoEnded);
+
+    // Pre-emptive queue transition on timeupdate (prevents YouTube Mix from auto-advancing)
+    video.removeEventListener("timeupdate", handleVideoTimeUpdateForQueue);
+    video.addEventListener("timeupdate", handleVideoTimeUpdateForQueue);
 
     // Track user-initiated pause so the Android auto-play recovery injection
     // (scheduleDelayedInjections in MainActivity.java) doesn't override an intentional pause
@@ -3320,10 +3421,13 @@
 
   window.__gachaRestoreFullscreen = checkAndRestoreFullscreen;
 
-  function navigateToVideo(videoId, title) {
+  function navigateToVideo(videoId, title, stripMix = false) {
     if (!videoId) return;
     saveFullscreenStateBeforeNavigate();
     recordRecentPlayedVideoId(videoId);
+
+    const cleanPath = "/watch?v=" + videoId + (stripMix ? "&gcmv_queue=1" : "");
+    const fullCleanUrl = "https://" + (window.location.host || "m.youtube.com") + cleanPath;
 
     // 1. Try desktop YouTube movie_player SPA navigation (preserves fullscreen seamlessly without reload)
     try {
@@ -3331,7 +3435,7 @@
       if (moviePlayer && typeof moviePlayer.loadVideoById === "function") {
         moviePlayer.loadVideoById(videoId);
         try {
-          window.history.pushState(null, "", "/watch?v=" + videoId);
+          window.history.pushState(null, "", cleanPath);
           window.dispatchEvent(new CustomEvent("yt-navigate-finish"));
         } catch (e) {}
         if (title) showToast("▶️ Playing: " + title + " 🌸");
@@ -3341,12 +3445,12 @@
 
     // 2. AndroidBridge native navigation
     if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
-      window.AndroidBridge.loadUrl("https://m.youtube.com/watch?v=" + videoId);
+      window.AndroidBridge.loadUrl("https://m.youtube.com" + cleanPath);
       return;
     }
 
     // 3. Fallback to location.href
-    window.location.href = "https://" + window.location.host + "/watch?v=" + videoId;
+    window.location.href = fullCleanUrl;
   }
 
   window.__gachaPlayNow = navigateToVideo;
@@ -5624,7 +5728,7 @@
   }
 
   async function checkAndEnforceGachaNext(triggerSource = "autoplay_guard") {
-    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip";
+    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip" || triggerSource === "queue_immediate";
     if (!settings.enabled || (!settings.autoplayGuard && !isExplicitSkip)) return;
 
     ensureYoutubeAutoplayToggleOn();
@@ -5636,7 +5740,7 @@
       broadcastCloudState();
       if (typeof refreshInpageQueue === "function") refreshInpageQueue();
       showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
-      navigateToVideo(item.videoId, item.title);
+      navigateToVideo(item.videoId, item.title, true);
       return;
     }
 
@@ -5648,7 +5752,7 @@
           const item = JSON.parse(queuedJson);
           if (item && item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
-            navigateToVideo(item.videoId, item.title);
+            navigateToVideo(item.videoId, item.title, true);
             return;
           }
         }
@@ -5666,11 +5770,17 @@
           const data = await res.json();
           if (data && data.item && data.item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
-            navigateToVideo(data.item.videoId, data.item.title);
+            navigateToVideo(data.item.videoId, data.item.title, true);
             return;
           }
         }
       } catch (e) {}
+    }
+
+    // 3. If no queued videos remain, check if we have a saved Mix to return to!
+    if (savedMixContext && savedMixContext.listId) {
+      resumeSavedMix();
+      return;
     }
 
     const urlParams = new URLSearchParams(window.location.search);

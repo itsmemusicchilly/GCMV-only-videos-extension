@@ -1487,6 +1487,14 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
+        public boolean hasQueuedVideo() {
+            if (remoteServerManager != null) {
+                return remoteServerManager.hasQueuedVideo();
+            }
+            return false;
+        }
+
+        @JavascriptInterface
         public String popNextQueuedVideo() {
             if (remoteServerManager != null) {
                 RemoteServerManager.QueueItem item = remoteServerManager.popNextQueuedVideo();
