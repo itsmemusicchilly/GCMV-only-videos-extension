@@ -33,7 +33,7 @@
   ],
   "content_security_policy": "script-src 'self'; object-src 'self'; connect-src 'self' https: wss: http:;",
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["paho-mqtt-min.js", "background.js"]
   },
   "content_scripts": [
     {
@@ -55,7 +55,8 @@
   ],
   "web_accessible_resources": [
     "icons/*.png",
-    "remote/*"
+    "remote/*",
+    "paho-mqtt-min.js"
   ],
   "browser_specific_settings": {
     "gecko": {

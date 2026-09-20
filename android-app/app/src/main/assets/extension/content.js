@@ -2677,10 +2677,29 @@
           if (conn && conn.open) {
             conn.send({ type: "SEARCH_RESULTS", query: data.query, results });
           }
+          try {
+            chrome.runtime.sendMessage({
+              type: "GCMV_SEARCH_RESULTS",
+              query: data.query,
+              results: results
+            }, () => {
+              if (chrome.runtime.lastError) {}
+            });
+          } catch (_) {}
         }
         break;
     }
   }
+
+  try {
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request && request.type === "GCMV_REMOTE_CMD") {
+        handleCloudRemoteCommand(request.command);
+        sendResponse({ ok: true });
+        return true;
+      }
+    });
+  } catch (_) {}
 
   async function initCloudRemoteHost() {
     if (typeof Peer === "undefined") {
@@ -2753,6 +2772,23 @@
     const volume = video ? Math.round(video.volume * 100) : 100;
 
     broadcastCloudState();
+
+    try {
+      chrome.runtime.sendMessage({
+        type: "GCMV_PLAYER_STATE",
+        state: {
+          videoId,
+          title,
+          isPlaying,
+          volume,
+          currentTime: video ? video.currentTime : 0,
+          duration: video ? video.duration : 0,
+          queue: cloudRemoteQueue
+        }
+      }, () => {
+        if (chrome.runtime.lastError) {}
+      });
+    } catch (_) {}
 
     if (window.AndroidBridge && typeof window.AndroidBridge.updateCurrentPlayback === "function") {
       try {

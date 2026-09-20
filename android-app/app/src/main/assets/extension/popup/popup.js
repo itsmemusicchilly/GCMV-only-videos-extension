@@ -678,6 +678,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${activeCloudRoomCode}`;
       if (popupCloudRemoteUrlInput) popupCloudRemoteUrlInput.value = cloudUrl;
       renderCloudQrCode(cloudUrl);
+      try {
+        chrome.runtime.sendMessage({ type: "GCMV_ROOM_CODE_CHANGED", roomCode: activeCloudRoomCode }, () => {
+          if (chrome.runtime.lastError) {}
+        });
+      } catch (_) {}
     });
   }
 

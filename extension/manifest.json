@@ -61,7 +61,8 @@
     {
       "resources": [
         "icons/*.png",
-        "remote/*"
+        "remote/*",
+        "paho-mqtt-min.js"
       ],
       "matches": [
         "*://*.youtube.com/*",
