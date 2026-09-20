@@ -130,6 +130,129 @@ function getLocalIp() {
   return "127.0.0.1";
 }
 
+function getAvailableIps() {
+  const list = [];
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const lower = name.toLowerCase();
+      for (const net of interfaces[name]) {
+        const isV4 = net.family === "IPv4" || net.family === 4;
+        if (isV4 && !net.internal && net.address !== "127.0.0.1") {
+          let type = "other";
+          let label = name;
+          if (lower.includes("tailscale") || lower.startsWith("ts") || net.address.startsWith("100.")) {
+            type = "tailscale";
+            label = "Tailscale";
+          } else if (lower.startsWith("wlan") || lower.startsWith("wl") || lower.includes("wi-fi") || lower.includes("wifi")) {
+            type = "wifi";
+            label = "Wi-Fi";
+          } else if (lower.startsWith("eth") || lower.startsWith("en")) {
+            type = "ethernet";
+            label = "Ethernet";
+          } else if (lower.startsWith("ap") || lower.includes("hotspot")) {
+            type = "hotspot";
+            label = "Hotspot";
+          }
+          list.push({ name: label, ip: net.address, type: type });
+        }
+      }
+    }
+  } catch (e) {}
+  return list;
+}
+
+function searchYouTube(query, callback) {
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  const options = {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9"
+    }
+  };
+  https.get(searchUrl, options, (resp) => {
+    let html = "";
+    resp.on("data", (chunk) => { html += chunk; });
+    resp.on("end", () => {
+      try {
+        const results = parseYouTubeSearchResults(html);
+        callback(null, results);
+      } catch (e) {
+        callback(e, []);
+      }
+    });
+  }).on("error", (e) => {
+    callback(e, []);
+  });
+}
+
+function parseYouTubeSearchResults(html) {
+  const marker = "var ytInitialData = ";
+  let idx = html.indexOf(marker);
+  if (idx === -1) {
+    const marker2 = "window[\"ytInitialData\"] = ";
+    idx = html.indexOf(marker2);
+    if (idx === -1) return [];
+    idx += marker2.length;
+  } else {
+    idx += marker.length;
+  }
+
+  let endIdx = html.indexOf(";</script>", idx);
+  if (endIdx === -1) endIdx = html.indexOf(";\n", idx);
+  if (endIdx === -1) return [];
+
+  const jsonStr = html.substring(idx, endIdx).trim();
+  const root = JSON.parse(jsonStr);
+  const results = [];
+
+  const contents =
+    root.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
+  if (!Array.isArray(contents)) return results;
+
+  for (const section of contents) {
+    const items = section.itemSectionRenderer?.contents;
+    if (!Array.isArray(items)) continue;
+
+    for (const item of items) {
+      const vr = item.videoRenderer;
+      if (!vr || !vr.videoId) continue;
+
+      const videoId = vr.videoId;
+      let title = "";
+      if (vr.title?.runs && vr.title.runs.length > 0) {
+        title = vr.title.runs.map(r => r.text).join("");
+      } else if (vr.title?.simpleText) {
+        title = vr.title.simpleText;
+      }
+
+      let channel = "";
+      if (vr.ownerText?.runs && vr.ownerText.runs.length > 0) {
+        channel = vr.ownerText.runs.map(r => r.text).join("");
+      }
+
+      let thumbnail = "";
+      if (vr.thumbnail?.thumbnails && vr.thumbnail.thumbnails.length > 0) {
+        const thumbs = vr.thumbnail.thumbnails;
+        thumbnail = thumbs[thumbs.length - 1].url;
+      } else {
+        thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      }
+
+      results.push({
+        id: videoId,
+        title: title || `YouTube Video (${videoId})`,
+        channel: channel,
+        thumbnail: thumbnail
+      });
+
+      if (results.length >= 20) break;
+    }
+    if (results.length >= 20) break;
+  }
+  return results;
+}
+
 function extractYouTubeVideoId(input) {
   if (!input || typeof input !== "string") return null;
   const str = input.trim();
@@ -290,10 +413,15 @@ function getWebRemoteHtml(pinRequired) {
     .input-box:focus { border-color: var(--pink); box-shadow: 0 0 10px rgba(255,46,147,0.3); }
     .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .btn-act { height: 42px; border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s; }
-    .btn-act:active { transform: scale(0.96); }
-    .btn-now { background: var(--pink); color: #fff; }
+    .btn-act:active { transform: scale(0.96);    .btn-now { background: var(--pink); color: #fff; }
     .btn-next { background: #6b21a8; color: #fff; border: 1px solid #a855f7; }
     .btn-queue { background: rgba(0,229,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }
+    .search-item { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+    .search-thumb-row { display: flex; gap: 10px; align-items: center; }
+    .search-thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: #222; }
+    .search-meta { flex: 1; min-width: 0; }
+    .search-title { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .search-channel { font-size: 11px; color: var(--subtext); margin-top: 3px; }
     .queue-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
     .queue-num { font-size: 12px; font-weight: 800; color: var(--cyan); margin-right: 10px; min-width: 18px; }
     .queue-title { font-size: 13px; font-weight: 600; color: #eee; flex: 1; word-break: break-word; }
@@ -331,9 +459,19 @@ function getWebRemoteHtml(pinRequired) {
     </div>
   </div>
 
+  <!-- Search YouTube -->
+  <div class="card">
+    <div class="card-title">🔍 Search YouTube / GCMV</div>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <input type="text" id="inputSearch" class="input-box" style="margin-bottom:0;" placeholder="Search songs, GCMV, GLMV...">
+      <button class="btn-ctrl btn-primary" id="btnSearch" style="width:76px; height:46px; flex:none; font-size:14px;">Search</button>
+    </div>
+    <div id="searchResults" style="display:flex; flex-direction:column; max-height:360px; overflow-y:auto;"></div>
+  </div>
+
   <!-- Add Video to Queue -->
   <div class="card">
-    <div class="card-title">➕ Add Video from Phone</div>
+    <div class="card-title">➕ Add Video from Link / ID</div>
     <input type="text" id="inputUrl" class="input-box" placeholder="Paste YouTube link or Video ID...">
     <div class="btn-grid">
       <button class="btn-act btn-now" id="btnPlayNow">▶️ Play Now</button>
@@ -410,6 +548,56 @@ function getWebRemoteHtml(pinRequired) {
         \`).join('');
       }
     }
+
+    async function doSearch() {
+      const q = document.getElementById('inputSearch').value.trim();
+      if (!q) return showToast('⚠️ Enter a search query');
+      const sResults = document.getElementById('searchResults');
+      sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">🔍 Searching...</div>';
+      const res = await api('/api/search?q=' + encodeURIComponent(q));
+      if (!res || !res.results || res.results.length === 0) {
+        sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">No results found</div>';
+        return;
+      }
+      window._lastSearchResults = res.results;
+      sResults.innerHTML = res.results.map((item, idx) => \`
+        <div class="search-item">
+          <div class="search-thumb-row">
+            <img class="search-thumb" src="\${item.thumbnail || ''}" alt="" onerror="this.style.display='none'">
+            <div class="search-meta">
+              <div class="search-title">\${item.title || 'Video'}</div>
+              <div class="search-channel">\${item.channel || ''}</div>
+            </div>
+          </div>
+          <div class="btn-grid">
+            <button class="btn-act btn-now" onclick="actionSearchResult('\${item.id}', \${idx}, 'play_now')">▶️ Play Now</button>
+            <button class="btn-act btn-next" onclick="actionSearchResult('\${item.id}', \${idx}, 'play_next')">⏭️ Play Next</button>
+            <button class="btn-act btn-queue" onclick="actionSearchResult('\${item.id}', \${idx}, 'add_queue')">➕ Add Queue</button>
+          </div>
+        </div>
+      \`).join('');
+    }
+
+    window.actionSearchResult = async function(id, idx, action) {
+      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || { id: id };
+      const res = await api('/api/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: item.id || id, title: item.title, action: action, pin: currentPin })
+      });
+      if (res && res.success) {
+        const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued next!' : '➕ Added to queue!';
+        showToast(actLabel);
+        refreshStatus();
+      } else {
+        showToast('❌ ' + (res?.error || 'Action failed'));
+      }
+    };
+
+    document.getElementById('btnSearch').addEventListener('click', doSearch);
+    document.getElementById('inputSearch').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSearch();
+    });
 
     async function addVideo(action) {
       const input = document.getElementById('inputUrl');
@@ -541,6 +729,7 @@ const server = http.createServer((req, res) => {
     }
 
     const localIp = getLocalIp();
+    const addresses = getAvailableIps();
     const serverUrl = `http://${localIp}:${boundPort}/remote`;
 
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -551,6 +740,7 @@ const server = http.createServer((req, res) => {
         version: "1.0.3.3",
         serverUrl: serverUrl,
         ip: localIp,
+        addresses: addresses,
         port: boundPort,
         pinRequired: serverConfig.pinRequired && Boolean(serverConfig.remotePin),
         currentVideo: currentPlayback,
@@ -566,11 +756,11 @@ const server = http.createServer((req, res) => {
   // 2b. QR Code generation (SVG)
   if (req.method === "GET" && (pathname === "/api/qr" || pathname === "/qr.svg")) {
     const localIp = getLocalIp();
-    const serverUrl = `http://${localIp}:${boundPort}/remote`;
+    const targetUrl = (query && query.url) ? String(query.url).trim() : `http://${localIp}:${boundPort}/remote`;
     if (qrcodeLib) {
       try {
         const qr = qrcodeLib(0, "M");
-        qr.addData(serverUrl);
+        qr.addData(targetUrl);
         qr.make();
         const svg = qr.createSvgTag({ scalable: true });
         res.writeHead(200, {
@@ -583,6 +773,26 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(500, { "Content-Type": "text/plain" });
     res.end("QR Generator unavailable");
+    return;
+  }
+
+  // 2c. YouTube Search API (Zero external API keys)
+  if (req.method === "GET" && pathname === "/api/search") {
+    const q = (query && query.q ? String(query.q).trim() : "");
+    if (!q) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing 'q' query parameter" }));
+      return;
+    }
+    searchYouTube(q, (err, results) => {
+      if (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Search failed", results: [] }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ query: q, results: results }));
+      }
+    });
     return;
   }
 
@@ -635,6 +845,7 @@ const server = http.createServer((req, res) => {
 
           const rawUrl = data.url || data.videoId;
           const action = data.action || "add_queue"; // play_now, play_next, add_queue
+          const title = data.title && String(data.title).trim();
           const videoId = extractYouTubeVideoId(rawUrl);
 
           if (!videoId) {
@@ -646,10 +857,12 @@ const server = http.createServer((req, res) => {
           const item = {
             id: `q_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
             videoId: videoId,
-            title: `YouTube Video (${videoId})`,
+            title: title ? title : `YouTube Video (${videoId})`,
             addedAt: Date.now()
           };
-          fetchVideoTitleAsync(item);
+          if (!title) {
+            fetchVideoTitleAsync(item);
+          }
 
           if (action === "play_now") {
             pendingControls.push({ action: "play_now", videoId, title: item.title });
@@ -693,7 +906,7 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const action = data.action; // play, pause, next, volume
+        const action = data.action; // play, pause, next, volume, play_now
         const val = data.value;
 
         if (action === "next") {
@@ -703,6 +916,9 @@ const server = http.createServer((req, res) => {
           } else {
             pendingControls.push({ action: "next" });
           }
+        } else if (action === "play_now" && (data.videoId || data.url)) {
+          const vid = extractYouTubeVideoId(data.videoId || data.url);
+          pendingControls.push({ action: "play_now", videoId: vid, title: data.title });
         } else {
           pendingControls.push({ action, value: val });
         }

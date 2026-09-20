@@ -138,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
                         webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
                         break;
                     case "next":
-                        webView.evaluateJavascript("(function(){ var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next'); if(btn) btn.click(); else if(window.__gachaSkipVideo) window.__gachaSkipVideo('remote_skip'); })()", null);
+                        webView.evaluateJavascript("(function(){ var oldUrl=window.location.href; var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next'); var clicked=false; if(btn){ btn.click(); clicked=true; } setTimeout(function(){ if(!clicked || window.location.href===oldUrl){ if(typeof window.__gachaSkipVideo==='function') window.__gachaSkipVideo('remote_skip'); else if(typeof window.__gachaPlayNext==='function') window.__gachaPlayNext(); } }, 1000); })()", null);
                         break;
                     case "volume":
                         if (value instanceof Number) {
@@ -355,14 +355,65 @@ public class MainActivity extends AppCompatActivity {
 
         ImageView ivRemoteQr = view.findViewById(R.id.iv_remote_qr);
         View layoutRemoteQr = view.findViewById(R.id.layout_remote_qr);
+        android.widget.HorizontalScrollView scrollIpChips = view.findViewById(R.id.scroll_remote_ip_chips);
+        LinearLayout layoutIpChips = view.findViewById(R.id.layout_remote_ip_chips);
+        final String[] activeUrlHolder = new String[] { remoteServerManager != null ? remoteServerManager.getServerUrl() : "http://127.0.0.1:8080/remote" };
 
         Runnable refreshRemoteUi = () -> {
             if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                String url = remoteServerManager.getServerUrl();
-                if (tvRemoteUrl != null) tvRemoteUrl.setText(url);
+                List<RemoteServerManager.NetworkAddressInfo> addrs = remoteServerManager.getAvailableIpAddresses();
+                int port = remoteServerManager.getPort();
+
+                if (layoutIpChips != null && scrollIpChips != null) {
+                    layoutIpChips.removeAllViews();
+                    if (addrs.size() > 1) {
+                        scrollIpChips.setVisibility(View.VISIBLE);
+                        for (RemoteServerManager.NetworkAddressInfo info : addrs) {
+                            com.google.android.material.button.MaterialButton chip = new com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle);
+                            String icon = "tailscale".equals(info.type) ? "🔒" : "wifi".equals(info.type) ? "📶" : "ethernet".equals(info.type) ? "🌐" : "📱";
+                            chip.setText(icon + " " + info.name + ": " + info.ip);
+                            chip.setTextSize(11f);
+                            chip.setAllCaps(false);
+                            chip.setCornerRadius((int) (12 * getResources().getDisplayMetrics().density));
+                            chip.setPadding(24, 8, 24, 8);
+                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    (int) (32 * getResources().getDisplayMetrics().density));
+                            lp.setMargins(0, 0, (int) (8 * getResources().getDisplayMetrics().density), 0);
+                            chip.setLayoutParams(lp);
+
+                            boolean isCurrent = activeUrlHolder[0].contains(info.ip);
+                            chip.setBackgroundTintList(android.content.res.ColorStateList.valueOf(isCurrent ? 0xFF6B21A8 : 0xFF211A3E));
+                            chip.setTextColor(isCurrent ? 0xFF00FFAA : 0xFFC5C0D8);
+
+                            chip.setOnClickListener(cv -> {
+                                activeUrlHolder[0] = "http://" + info.ip + ":" + port + "/remote";
+                                if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
+                                if (ivRemoteQr != null) {
+                                    Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
+                                    if (bmp != null) ivRemoteQr.setImageBitmap(bmp);
+                                }
+                                for (int i = 0; i < layoutIpChips.getChildCount(); i++) {
+                                    View child = layoutIpChips.getChildAt(i);
+                                    if (child instanceof com.google.android.material.button.MaterialButton) {
+                                        boolean sel = child == cv;
+                                        ((com.google.android.material.button.MaterialButton) child).setBackgroundTintList(
+                                                android.content.res.ColorStateList.valueOf(sel ? 0xFF6B21A8 : 0xFF211A3E));
+                                        ((com.google.android.material.button.MaterialButton) child).setTextColor(sel ? 0xFF00FFAA : 0xFFC5C0D8);
+                                    }
+                                }
+                            });
+                            layoutIpChips.addView(chip);
+                        }
+                    } else {
+                        scrollIpChips.setVisibility(View.GONE);
+                    }
+                }
+
+                if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
                 if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.VISIBLE);
                 if (ivRemoteQr != null) {
-                    Bitmap bmp = QRCodeUtil.generateQrBitmap(url, 400, 400);
+                    Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
                     if (bmp != null) {
                         ivRemoteQr.setImageBitmap(bmp);
                     }
@@ -370,6 +421,7 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 if (tvRemoteUrl != null) tvRemoteUrl.setText("Server Stopped");
                 if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.GONE);
+                if (scrollIpChips != null) scrollIpChips.setVisibility(View.GONE);
             }
         };
 
@@ -379,7 +431,7 @@ public class MainActivity extends AppCompatActivity {
 
         View.OnClickListener copyUrlListener = v -> {
             if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                String url = remoteServerManager.getServerUrl();
+                String url = activeUrlHolder[0];
                 android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) {
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("Remote Control URL", url));

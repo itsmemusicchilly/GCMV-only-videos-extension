@@ -229,6 +229,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function discoverAndSetRemoteUrl() {
     let bestUrl = settings.remoteServerUrl || "";
+    let addresses = [];
+    let serverPort = 3000;
     // Probe common local ports to find running remote server and get its real LAN IP
     const probePorts = [3000, 3001, 3002, 8080, 8081];
     for (const port of probePorts) {
@@ -236,6 +238,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
+          serverPort = port;
+          if (data && Array.isArray(data.addresses)) {
+            addresses = data.addresses;
+          }
           if (data && data.serverUrl) {
             bestUrl = data.serverUrl;
             break;
@@ -255,6 +261,30 @@ document.addEventListener("DOMContentLoaded", async () => {
       popupRemoteUrlInput.value = bestUrl;
     }
     renderPopupQrCode(bestUrl);
+
+    const chipsContainer = document.getElementById("popupRemoteIpChips");
+    if (chipsContainer) {
+      chipsContainer.innerHTML = "";
+      if (addresses.length > 1) {
+        chipsContainer.style.display = "flex";
+        addresses.forEach((info) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn-popup-test";
+          const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
+          btn.textContent = `${icon} ${info.name}: ${info.ip}`;
+          btn.style.cssText = "font-size:10px; padding:3px 7px; border-radius:10px; margin:2px; cursor:pointer;";
+          btn.onclick = () => {
+            const newUrl = `http://${info.ip}:${serverPort}/remote`;
+            if (popupRemoteUrlInput) popupRemoteUrlInput.value = newUrl;
+            renderPopupQrCode(newUrl);
+          };
+          chipsContainer.appendChild(btn);
+        });
+      } else {
+        chipsContainer.style.display = "none";
+      }
+    }
   }
 
   // Update UI appearance according to enabled status

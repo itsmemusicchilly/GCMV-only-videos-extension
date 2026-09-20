@@ -971,6 +971,23 @@
                     app:cornerRadius="16dp" />
             </LinearLayout>
 
+            <!-- Multi-IP Network Chips (WiFi, Tailscale, etc.) -->
+            <HorizontalScrollView
+                android:id="@+id/scroll_remote_ip_chips"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/layout_remote_ip_chips"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
             <!-- QR Code Section -->
             <LinearLayout
                 android:id="@+id/layout_remote_qr"

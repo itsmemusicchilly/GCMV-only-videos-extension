@@ -75,6 +75,142 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
+def get_available_ips():
+    results = []
+    # Method 1: ip -j addr (Linux)
+    try:
+        import subprocess
+        proc = subprocess.run(["ip", "-j", "addr"], capture_output=True, text=True, timeout=2)
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout)
+            for iface in data:
+                ifname = iface.get("ifname", "").lower()
+                addr_info = iface.get("addr_info", [])
+                for addr in addr_info:
+                    if addr.get("family") == "inet" and addr.get("local") != "127.0.0.1":
+                        ip = addr.get("local")
+                        label = ifname
+                        itype = "other"
+                        if "tailscale" in ifname or ifname.startswith("ts") or ip.startswith("100."):
+                            itype = "tailscale"
+                            label = "Tailscale"
+                        elif ifname.startswith("wlan") or ifname.startswith("wl") or "wifi" in ifname:
+                            itype = "wifi"
+                            label = "Wi-Fi"
+                        elif ifname.startswith("eth") or ifname.startswith("en"):
+                            itype = "ethernet"
+                            label = "Ethernet"
+                        elif "ap" in ifname or "hotspot" in ifname:
+                            itype = "hotspot"
+                            label = "Hotspot"
+                        results.append({"name": label, "ip": ip, "type": itype})
+            if results:
+                return results
+    except Exception:
+        pass
+
+    # Method 2: socket fallback
+    try:
+        host = socket.gethostname()
+        for info in socket.getaddrinfo(host, None):
+            if info[0] == socket.AF_INET:
+                ip = info[4][0]
+                if ip != "127.0.0.1" and not any(r["ip"] == ip for r in results):
+                    itype = "tailscale" if ip.startswith("100.") else "wifi" if ip.startswith("192.168.") else "other"
+                    name = "Tailscale" if itype == "tailscale" else "Wi-Fi" if itype == "wifi" else "LAN"
+                    results.append({"name": name, "ip": ip, "type": itype})
+    except Exception:
+        pass
+
+    if not results:
+        local_ip = get_local_ip()
+        results.append({"name": "Wi-Fi", "ip": local_ip, "type": "wifi"})
+    return results
+
+def search_youtube(query):
+    search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(query)}"
+    req = urllib.request.Request(
+        search_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+            return parse_youtube_search_results(html)
+    except Exception as e:
+        print(f"[Server] Search error: {e}")
+        return []
+
+def parse_youtube_search_results(html):
+    marker = "var ytInitialData = "
+    idx = html.find(marker)
+    if idx == -1:
+        marker2 = 'window["ytInitialData"] = '
+        idx = html.find(marker2)
+        if idx == -1:
+            return []
+        idx += len(marker2)
+    else:
+        idx += len(marker)
+
+    end_idx = html.find(";</script>", idx)
+    if end_idx == -1:
+        end_idx = html.find(";\n", idx)
+    if end_idx == -1:
+        return []
+
+    try:
+        data = json.loads(html[idx:end_idx].strip())
+        results = []
+        contents = (
+            data.get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [])
+        )
+        for section in contents:
+            items = section.get("itemSectionRenderer", {}).get("contents", [])
+            for item in items:
+                vr = item.get("videoRenderer")
+                if not vr or "videoId" not in vr:
+                    continue
+                vid = vr["videoId"]
+                title = ""
+                if "runs" in vr.get("title", {}):
+                    title = "".join(r.get("text", "") for r in vr["title"]["runs"])
+                elif "simpleText" in vr.get("title", {}):
+                    title = vr["title"]["simpleText"]
+
+                channel = ""
+                if "runs" in vr.get("ownerText", {}):
+                    channel = "".join(r.get("text", "") for r in vr["ownerText"]["runs"])
+
+                thumbnail = ""
+                thumbs = vr.get("thumbnail", {}).get("thumbnails", [])
+                if thumbs:
+                    thumbnail = thumbs[-1].get("url", "")
+                else:
+                    thumbnail = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+                results.append({
+                    "id": vid,
+                    "title": title or f"YouTube Video ({vid})",
+                    "channel": channel,
+                    "thumbnail": thumbnail
+                })
+                if len(results) >= 20:
+                    break
+            if len(results) >= 20:
+                break
+        return results
+    except Exception as e:
+        print(f"[Server] JSON parse search error: {e}")
+        return []
+
 def extract_youtube_video_id(input_str):
     if not input_str or not isinstance(input_str, str):
         return None
@@ -197,6 +333,12 @@ def get_web_remote_html(pin_required):
     .btn-now {{ background: var(--pink); color: #fff; }}
     .btn-next {{ background: #6b21a8; color: #fff; border: 1px solid #a855f7; }}
     .btn-queue {{ background: rgba(0,229,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }}
+    .search-item {{ background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }}
+    .search-thumb-row {{ display: flex; gap: 10px; align-items: center; }}
+    .search-thumb {{ width: 96px; height: 54px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: #222; }}
+    .search-meta {{ flex: 1; min-width: 0; }}
+    .search-title {{ font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }}
+    .search-channel {{ font-size: 11px; color: var(--subtext); margin-top: 3px; }}
     .queue-item {{ display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }}
     .queue-num {{ font-size: 12px; font-weight: 800; color: var(--cyan); margin-right: 10px; min-width: 18px; }}
     .queue-title {{ font-size: 13px; font-weight: 600; color: #eee; flex: 1; word-break: break-word; }}
@@ -234,9 +376,19 @@ def get_web_remote_html(pin_required):
     </div>
   </div>
 
+  <!-- Search YouTube -->
+  <div class="card">
+    <div class="card-title">🔍 Search YouTube / GCMV</div>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <input type="text" id="inputSearch" class="input-box" style="margin-bottom:0;" placeholder="Search songs, GCMV, GLMV...">
+      <button class="btn-ctrl btn-primary" id="btnSearch" style="width:76px; height:46px; flex:none; font-size:14px;">Search</button>
+    </div>
+    <div id="searchResults" style="display:flex; flex-direction:column; max-height:360px; overflow-y:auto;"></div>
+  </div>
+
   <!-- Add Video to Queue -->
   <div class="card">
-    <div class="card-title">➕ Add Video from Phone</div>
+    <div class="card-title">➕ Add Video from Link / ID</div>
     <input type="text" id="inputUrl" class="input-box" placeholder="Paste YouTube link or Video ID...">
     <div class="btn-grid">
       <button class="btn-act btn-now" id="btnPlayNow">▶️ Play Now</button>
@@ -304,6 +456,56 @@ def get_web_remote_html(pin_required):
         `).join('');
       }}
     }}
+
+    async function doSearch() {{
+      const q = document.getElementById('inputSearch').value.trim();
+      if (!q) return showToast('⚠️ Enter a search query');
+      const sResults = document.getElementById('searchResults');
+      sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">🔍 Searching...</div>';
+      const res = await api('/api/search?q=' + encodeURIComponent(q));
+      if (!res || !res.results || res.results.length === 0) {{
+        sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">No results found</div>';
+        return;
+      }}
+      window._lastSearchResults = res.results;
+      sResults.innerHTML = res.results.map((item, idx) => `
+        <div class="search-item">
+          <div class="search-thumb-row">
+            <img class="search-thumb" src="${{item.thumbnail || ''}}" alt="" onerror="this.style.display='none'">
+            <div class="search-meta">
+              <div class="search-title">${{item.title || 'Video'}}</div>
+              <div class="search-channel">${{item.channel || ''}}</div>
+            </div>
+          </div>
+          <div class="btn-grid">
+            <button class="btn-act btn-now" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'play_now')">▶️ Play Now</button>
+            <button class="btn-act btn-next" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'play_next')">⏭️ Play Next</button>
+            <button class="btn-act btn-queue" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'add_queue')">➕ Add Queue</button>
+          </div>
+        </div>
+      `).join('');
+    }}
+
+    window.actionSearchResult = async function(id, idx, action) {{
+      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || {{ id: id }};
+      const res = await api('/api/queue', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ url: item.id || id, title: item.title, action: action, pin: currentPin }})
+      }});
+      if (res && res.success) {{
+        const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued next!' : '➕ Added to queue!';
+        showToast(actLabel);
+        refreshStatus();
+      }} else {{
+        showToast('❌ ' + (res?.error || 'Action failed'));
+      }}
+    }};
+
+    document.getElementById('btnSearch').addEventListener('click', doSearch);
+    document.getElementById('inputSearch').addEventListener('keydown', (e) => {{
+      if (e.key === 'Enter') doSearch();
+    }});
 
     async function addVideo(action) {{
       const input = document.getElementById('inputUrl');
@@ -495,6 +697,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             local_ip = get_local_ip()
             bound_port = server_port
             server_url = f"http://{local_ip}:{bound_port}/remote"
+            addresses = get_available_ips()
 
             resp = {
                 "status": "online",
@@ -502,6 +705,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
                 "version": "1.0.3.3",
                 "serverUrl": server_url,
                 "ip": local_ip,
+                "addresses": addresses,
                 "port": bound_port,
                 "pinRequired": server_config.get("pinRequired") and bool(server_config.get("remotePin")),
                 "currentVideo": current_playback,
@@ -515,6 +719,25 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        # 2b. YouTube Search API (Zero external API keys)
+        if path == "/api/search":
+            q_list = query.get("q")
+            if not q_list or not q_list[0].strip():
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Missing 'q' query parameter"}).encode("utf-8"))
+                return
+            q = q_list[0].strip()
+            results = search_youtube(q)
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"query": q, "results": results}).encode("utf-8"))
             return
 
         # 3. Remote Queue GET
@@ -650,6 +873,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
 
             raw_url = body.get("url") or body.get("videoId")
             action = body.get("action", "add_queue")
+            title = body.get("title", "").strip() if isinstance(body.get("title"), str) else ""
             video_id = extract_youtube_video_id(raw_url)
             if not video_id:
                 self.send_response(400)
@@ -662,10 +886,11 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             item = {
                 "id": f"q_{int(time.time() * 1000)}_{random.randint(100, 999)}",
                 "videoId": video_id,
-                "title": f"YouTube Video ({video_id})",
+                "title": title if title else f"YouTube Video ({video_id})",
                 "addedAt": int(time.time() * 1000)
             }
-            fetch_video_title_async(item)
+            if not title:
+                fetch_video_title_async(item)
 
             with queue_lock:
                 if action == "play_now":
@@ -702,6 +927,9 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
                         pending_controls.append({"action": "play_now", "videoId": next_item["videoId"], "title": next_item["title"]})
                     else:
                         pending_controls.append({"action": "next"})
+                elif action == "play_now" and (body.get("videoId") or body.get("url")):
+                    vid = extract_youtube_video_id(body.get("videoId") or body.get("url"))
+                    pending_controls.append({"action": "play_now", "videoId": vid, "title": body.get("title", "")})
                 else:
                     pending_controls.append({"action": action, "value": val})
 

@@ -2492,9 +2492,18 @@
             } else if (item.action === "pause" && video) {
               video.pause();
             } else if (item.action === "next") {
+              const oldHref = window.location.href;
               const nextBtn = document.querySelector(".ytp-next-button, [data-testid=\"next-button\"], .player-controls-next");
-              if (nextBtn) nextBtn.click();
-              else checkAndEnforceGachaNext();
+              let clicked = false;
+              if (nextBtn) {
+                nextBtn.click();
+                clicked = true;
+              }
+              setTimeout(() => {
+                if (!clicked || window.location.href === oldHref) {
+                  checkAndEnforceGachaNext();
+                }
+              }, 1000);
             } else if (item.action === "play_now" && item.videoId) {
               showToast("📱 Remote: Playing ➔ " + (item.title || item.videoId) + " 🌸");
               window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
@@ -3920,6 +3929,7 @@
                     <input type="text" id="inpageRemoteUrlInput" class="gacha-time-input" readonly value="Loading...">
                     <button type="button" class="gacha-btn-nas-test" id="btnInpageCopyRemoteUrl">📋 Copy</button>
                   </div>
+                  <div id="inpageRemoteIpChips" style="display:none; gap:6px; flex-wrap:wrap; margin-top:8px;"></div>
                   <div id="inpageRemoteQrContainer" style="text-align: center; margin-top: 10px; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px;">
                     <div id="inpageRemoteQrBox" style="width: 140px; height: 140px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
                     <div style="font-size: 11px; color: #a09bb8; margin-top: 6px;">📷 Scan with phone camera to open</div>
@@ -4167,6 +4177,8 @@
       } else {
         (async () => {
           let bestUrl = settings.remoteServerUrl || "";
+          let addresses = [];
+          let serverPort = 3000;
           if (!bestUrl) {
             const probePorts = [3000, 3001, 3002, 8080, 8081];
             for (const port of probePorts) {
@@ -4174,6 +4186,10 @@
                 const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store" });
                 if (res.ok) {
                   const data = await res.json();
+                  serverPort = port;
+                  if (data && Array.isArray(data.addresses)) {
+                    addresses = data.addresses;
+                  }
                   if (data && data.serverUrl) {
                     bestUrl = data.serverUrl;
                     break;
@@ -4190,6 +4206,30 @@
           }
           inpageRemoteUrlInput.value = bestUrl;
           renderInpageQrCode(bestUrl);
+
+          const chipsContainer = widget.querySelector("#inpageRemoteIpChips");
+          if (chipsContainer) {
+            chipsContainer.innerHTML = "";
+            if (addresses.length > 1) {
+              chipsContainer.style.display = "flex";
+              addresses.forEach((info) => {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "gacha-btn-nas-test";
+                const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
+                btn.textContent = `${icon} ${info.name}: ${info.ip}`;
+                btn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer;";
+                btn.onclick = () => {
+                  const newUrl = `http://${info.ip}:${serverPort}/remote`;
+                  inpageRemoteUrlInput.value = newUrl;
+                  renderInpageQrCode(newUrl);
+                };
+                chipsContainer.appendChild(btn);
+              });
+            } else {
+              chipsContainer.style.display = "none";
+            }
+          }
         })();
       }
     }
@@ -5261,6 +5301,9 @@
 
     evaluateRecommendations();
   }
+
+  window.__gachaSkipVideo = checkAndEnforceGachaNext;
+  window.__gachaPlayNext = checkAndEnforceGachaNext;
 
   function showToast(msg, videoId = "", channelName = "") {
     const existing = document.querySelector(".gacha-toast");
