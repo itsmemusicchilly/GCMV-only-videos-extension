@@ -3,6 +3,45 @@
  */
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Universal storage adapter: supports Firefox (browser.storage Promises)
+  // and Chromium/Android (chrome.storage callback wrapped into Promise)
+  const extStorage = {
+    get: function (defaults) {
+      if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
+        return browser.storage.local.get(defaults);
+      }
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        try {
+          const res = chrome.storage.local.get(defaults);
+          if (res && typeof res.then === "function") return res;
+        } catch (_) {}
+        return new Promise((resolve) => {
+          chrome.storage.local.get(defaults, (data) => {
+            resolve(data || {});
+          });
+        });
+      }
+      return Promise.resolve({});
+    },
+    set: function (items) {
+      if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
+        return browser.storage.local.set(items);
+      }
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        try {
+          const res = chrome.storage.local.set(items);
+          if (res && typeof res.then === "function") return res;
+        } catch (_) {}
+        return new Promise((resolve) => {
+          chrome.storage.local.set(items, () => {
+            resolve();
+          });
+        });
+      }
+      return Promise.resolve();
+    }
+  };
+
   // DOM Elements
   const masterToggle = document.getElementById("masterToggle");
   const statusBadge = document.getElementById("statusBadge");
@@ -16,6 +55,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const toggleAutoSkipNonGacha = document.getElementById("toggleAutoSkipNonGacha");
   const toggleAutoplayGuard = document.getElementById("toggleAutoplayGuard");
   const toggleAutoUnmute = document.getElementById("toggleAutoUnmute");
+  const toggleSmoothPlayback = document.getElementById("toggleSmoothPlayback");
   const selectResolution = document.getElementById("selectResolution");
   const toggleFilterOfficial = document.getElementById("toggleFilterOfficial");
 
@@ -84,7 +124,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function setVolumeBoost(val) {
     const boost = Math.max(100, Math.min(1000, Math.round(val)));
     updateVolumeBoostUI(boost);
-    await chrome.storage.local.set({ volumeBoost: boost });
+    await extStorage.set({ volumeBoost: boost });
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]?.id) {
@@ -95,7 +135,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Load existing settings
   try {
-    const settings = await chrome.storage.local.get({
+    const settings = await extStorage.get({
       enabled: true,
       blockAds: true,
       showJukebox: true,
@@ -115,6 +155,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       nasAutoSync: false,
       volumeBoost: 100,
       autoUnmute: true,
+      smoothPlayback: true,
       preferredResolution: "auto"
     });
 
@@ -123,7 +164,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (settings.useNasServer && !settings.nasAuthToken) {
       settings.useNasServer = false;
       settings.nasAutoSync = false;
-      await chrome.storage.local.set({ useNasServer: false, nasAutoSync: false });
+      await extStorage.set({ useNasServer: false, nasAutoSync: false });
     }
 
     applyUIState(settings.enabled);
@@ -135,6 +176,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (toggleAutoSkipNonGacha) toggleAutoSkipNonGacha.checked = settings.autoSkipNonGacha;
     toggleAutoplayGuard.checked = settings.autoplayGuard;
     if (toggleAutoUnmute) toggleAutoUnmute.checked = settings.autoUnmute !== false;
+    if (toggleSmoothPlayback) toggleSmoothPlayback.checked = settings.smoothPlayback !== false;
     if (selectResolution) selectResolution.value = settings.preferredResolution || "auto";
     if (toggleFilterOfficial) toggleFilterOfficial.checked = settings.filterOfficialVideos;
     if (toggleSkipNonMusic) toggleSkipNonMusic.checked = settings.skipNonMusic;
@@ -172,7 +214,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Master Toggle Change
   masterToggle.addEventListener("change", async (e) => {
     const isEnabled = e.target.checked;
-    await chrome.storage.local.set({ enabled: isEnabled });
+    await extStorage.set({ enabled: isEnabled });
     applyUIState(isEnabled);
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -208,80 +250,86 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Feature Toggles Change
   toggleJukebox.addEventListener("change", async (e) => {
-    await chrome.storage.local.set({ showJukebox: e.target.checked });
+    await extStorage.set({ showJukebox: e.target.checked });
   });
 
   toggleSearchChips.addEventListener("change", async (e) => {
-    await chrome.storage.local.set({ showSearchChips: e.target.checked });
+    await extStorage.set({ showSearchChips: e.target.checked });
   });
 
   if (toggleBlockAds) {
     toggleBlockAds.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ blockAds: e.target.checked });
+      await extStorage.set({ blockAds: e.target.checked });
     });
   }
 
   if (toggleAutoSkipNonGacha) {
     toggleAutoSkipNonGacha.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ autoSkipNonGacha: e.target.checked });
+      await extStorage.set({ autoSkipNonGacha: e.target.checked });
     });
   }
 
   toggleAutoplayGuard.addEventListener("change", async (e) => {
-    await chrome.storage.local.set({ autoplayGuard: e.target.checked });
+    await extStorage.set({ autoplayGuard: e.target.checked });
   });
 
   if (toggleAutoUnmute) {
     toggleAutoUnmute.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ autoUnmute: e.target.checked });
+      await extStorage.set({ autoUnmute: e.target.checked });
+    });
+  }
+
+  if (toggleSmoothPlayback) {
+    toggleSmoothPlayback.addEventListener("change", async (e) => {
+      await extStorage.set({ smoothPlayback: e.target.checked });
     });
   }
 
   if (selectResolution) {
     selectResolution.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ preferredResolution: e.target.value });
+      await extStorage.set({ preferredResolution: e.target.value });
     });
   }
 
   if (toggleFilterOfficial) {
     toggleFilterOfficial.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ filterOfficialVideos: e.target.checked });
+      await extStorage.set({ filterOfficialVideos: e.target.checked });
     });
   }
 
   if (toggleSkipNonMusic) {
     toggleSkipNonMusic.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ skipNonMusic: e.target.checked });
+      await extStorage.set({ skipNonMusic: e.target.checked });
     });
   }
 
   if (toggleSkipIntroOutro) {
     toggleSkipIntroOutro.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ skipIntroOutro: e.target.checked });
+      await extStorage.set({ skipIntroOutro: e.target.checked });
     });
   }
 
   if (toggleSkipSponsor) {
     toggleSkipSponsor.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ skipSponsor: e.target.checked });
+      await extStorage.set({ skipSponsor: e.target.checked });
     });
   }
 
   if (togglePoiHighlights) {
     togglePoiHighlights.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ showPoiHighlights: e.target.checked });
+      await extStorage.set({ showPoiHighlights: e.target.checked });
     });
   }
 
   if (toggleSponsorBlockApi) {
     toggleSponsorBlockApi.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ useSponsorBlockApi: e.target.checked });
+      await extStorage.set({ useSponsorBlockApi: e.target.checked });
     });
   }
 
   if (toggleCustomDb) {
     toggleCustomDb.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ useCustomDb: e.target.checked });
+      await extStorage.set({ useCustomDb: e.target.checked });
     });
   }
 
@@ -292,19 +340,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (isNas && (!popupNasUrlInput?.value.trim() || !popupNasTokenInput?.value.trim())) {
         e.target.checked = false;
         if (popupNasDetails) popupNasDetails.classList.remove("hidden");
-        await chrome.storage.local.set({ useNasServer: false });
+        await extStorage.set({ useNasServer: false });
         setNasStatus("Enter the server URL and token, then use Test to enable NAS access", "#ffcc66");
         return;
       }
       if (popupNasDetails) popupNasDetails.classList.toggle("hidden", !isNas);
-      await chrome.storage.local.set({ useNasServer: isNas });
+      await extStorage.set({ useNasServer: isNas });
     });
   }
 
   function persistNasFields() {
     const url = popupNasUrlInput ? popupNasUrlInput.value.trim() : "";
     const token = popupNasTokenInput ? popupNasTokenInput.value.trim() : "";
-    return chrome.storage.local.set({ nasServerUrl: url, nasAuthToken: token });
+    return extStorage.set({ nasServerUrl: url, nasAuthToken: token });
   }
 
   if (popupNasUrlInput) {
@@ -326,7 +374,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (togglePopupNasAutoSync) {
     togglePopupNasAutoSync.addEventListener("change", async (e) => {
-      await chrome.storage.local.set({ nasAutoSync: e.target.checked });
+      await extStorage.set({ nasAutoSync: e.target.checked });
     });
   }
 
@@ -405,7 +453,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       setNasStatus("❌ Browser permission for this NAS address was not granted", "#ff6666");
       return null;
     }
-    await chrome.storage.local.set({ nasServerUrl: baseUrl, nasAuthToken: token });
+    await extStorage.set({ nasServerUrl: baseUrl, nasAuthToken: token });
     if (popupNasUrlInput) popupNasUrlInput.value = baseUrl;
     return baseUrl;
   }
@@ -435,7 +483,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       setNasStatus(`⏳ Testing ${baseUrl}...`, "#00f0ff");
       const res = await popupNasFetch(`${baseUrl}/health`);
       if (res.ok && res.data) {
-        await chrome.storage.local.set({ useNasServer: true });
+        await extStorage.set({ useNasServer: true });
         if (toggleNasServer) toggleNasServer.checked = true;
         if (popupNasDetails) popupNasDetails.classList.remove("hidden");
         setNasStatus(`✅ Connected! (${res.data.totalSegments || 0} segments on NAS)`, "#00ffaa");
@@ -449,7 +497,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     btnPopupNasExport.addEventListener("click", async () => {
       const baseUrl = await prepareNasConfig();
       if (!baseUrl) return;
-      const { customSkipDb = {} } = await chrome.storage.local.get("customSkipDb");
+      const { customSkipDb = {} } = await extStorage.get("customSkipDb");
       setNasStatus("⏳ Uploading backup to NAS...", "#00f0ff");
       const res = await popupNasFetch(`${baseUrl}/api/database?merge=true`, {
         method: "POST",
@@ -472,9 +520,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       const res = await popupNasFetch(`${baseUrl}/api/database`);
       if (res.ok && res.data && typeof res.data === "object" && !Array.isArray(res.data)) {
         const remoteDb = res.data;
-        const { customSkipDb = {} } = await chrome.storage.local.get("customSkipDb");
+        const { customSkipDb = {} } = await extStorage.get("customSkipDb");
         const merged = { ...customSkipDb, ...remoteDb };
-        await chrome.storage.local.set({ customSkipDb: merged });
+        await extStorage.set({ customSkipDb: merged });
         setNasStatus(`📥 Restored ${Object.keys(remoteDb).length} videos from NAS!`, "#00ffaa");
       } else {
         setNasStatus(`❌ Restore error: ${res.error || "HTTP " + res.status}`, "#ff6666");

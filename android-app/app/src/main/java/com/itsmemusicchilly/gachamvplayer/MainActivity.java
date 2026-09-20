@@ -61,7 +61,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "GachaMVPlayer";
     private static final String YOUTUBE_URL = "https://m.youtube.com";
-    private static final String USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36";
+    private static final String USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36";
 
     private WebView webView;
     private FrameLayout customViewContainer;
@@ -229,6 +229,7 @@ public class MainActivity extends AppCompatActivity {
         com.google.android.material.switchmaterial.SwitchMaterial swAutoSkip = view.findViewById(R.id.switch_autoskip);
         com.google.android.material.switchmaterial.SwitchMaterial swGuard = view.findViewById(R.id.switch_autoplayguard);
         com.google.android.material.switchmaterial.SwitchMaterial swAutoUnmute = view.findViewById(R.id.switch_auto_unmute);
+        com.google.android.material.switchmaterial.SwitchMaterial swSmooth = view.findViewById(R.id.switch_smooth_playback);
         com.google.android.material.switchmaterial.SwitchMaterial swFilterOfficial = view.findViewById(R.id.switch_filter_official);
         com.google.android.material.switchmaterial.SwitchMaterial swSkipNonMusic = view.findViewById(R.id.switch_skip_nonmusic);
         com.google.android.material.switchmaterial.SwitchMaterial swSkipIntroOutro = view.findViewById(R.id.switch_skip_introoutro);
@@ -260,6 +261,7 @@ public class MainActivity extends AppCompatActivity {
         boolean autoSkip = sp.getBoolean("autoSkipNonGacha", true);
         boolean guard = sp.getBoolean("autoplayGuard", true);
         boolean autoUnmute = sp.getBoolean("autoUnmute", true);
+        boolean smoothPlayback = sp.getBoolean("smoothPlayback", true);
         boolean filterOfficial = sp.getBoolean("filterOfficialVideos", true);
         boolean skipNonMusic = sp.getBoolean("skipNonMusic", true);
         boolean skipIntroOutro = sp.getBoolean("skipIntroOutro", true);
@@ -280,6 +282,7 @@ public class MainActivity extends AppCompatActivity {
         if (swAutoSkip != null) swAutoSkip.setChecked(autoSkip);
         if (swGuard != null) swGuard.setChecked(guard);
         if (swAutoUnmute != null) swAutoUnmute.setChecked(autoUnmute);
+        if (swSmooth != null) swSmooth.setChecked(smoothPlayback);
         if (swFilterOfficial != null) swFilterOfficial.setChecked(filterOfficial);
         if (swSkipNonMusic != null) swSkipNonMusic.setChecked(skipNonMusic);
         if (swSkipIntroOutro != null) swSkipIntroOutro.setChecked(skipIntroOutro);
@@ -315,6 +318,7 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swAutoSkip, "autoSkipNonGacha", null);
         autoSaveSetting(swGuard, "autoplayGuard", null);
         autoSaveSetting(swAutoUnmute, "autoUnmute", null);
+        autoSaveSetting(swSmooth, "smoothPlayback", this::applySmoothPlayback);
 
         Spinner spResolution = view.findViewById(R.id.spinner_resolution);
         String[] resDisplayOptions = new String[]{"Auto", "4K (2160p)", "1440p (2K)", "1080p", "720p", "480p", "360p", "240p", "144p"};
@@ -578,10 +582,18 @@ public class MainActivity extends AppCompatActivity {
 
     private static final Set<String> BOOLEAN_PREF_KEYS = new HashSet<>(Arrays.asList(
             "enabled", "showJukebox", "showSearchChips", "blockAds", "autoSkipNonGacha",
-            "autoplayGuard", "autoUnmute", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
+            "autoplayGuard", "autoUnmute", "smoothPlayback", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
             "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
             "useNasServer", "nasAutoSync"
     ));
+
+    private void applySmoothPlayback(boolean smooth) {
+        if (webView != null) {
+            // LAYER_TYPE_NONE prevents off-screen hardware layer double-buffering,
+            // allowing hardware acceleration to render video directly to the window surface without GPU buffer stalls.
+            webView.setLayerType(smooth ? View.LAYER_TYPE_NONE : View.LAYER_TYPE_HARDWARE, null);
+        }
+    }
 
     private void syncSettingToWebView(String key, Object value) {
         if (webView == null) return;
@@ -741,7 +753,8 @@ public class MainActivity extends AppCompatActivity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        boolean smoothPlayback = getSharedPreferences("gacha_prefs", MODE_PRIVATE).getBoolean("smoothPlayback", true);
+        applySmoothPlayback(smoothPlayback);
         webView.setKeepScreenOn(true);
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
@@ -850,6 +863,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void injectBackgroundShim(WebView view) {
         if (view == null) return;
+        boolean smooth = getSharedPreferences("gacha_prefs", MODE_PRIVATE).getBoolean("smoothPlayback", true);
         String backgroundPlayShim =
             "(function() {\n" +
             "  if (window.__GCMV_BG_SHIM_LOADED__) return;\n" +
@@ -862,6 +876,24 @@ public class MainActivity extends AppCompatActivity {
             "    window.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);\n" +
             "  } catch(e) { console.warn('[GCMV] BG Shim err:', e);\n" +
             "  }\n" +
+            (smooth ?
+            "  try {\n" +
+            "    if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {\n" +
+            "      var origIsTypeSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);\n" +
+            "      window.MediaSource.isTypeSupported = function(type) {\n" +
+            "        if (typeof type === 'string' && /av01|av1/i.test(type)) return false;\n" +
+            "        return origIsTypeSupported(type);\n" +
+            "      };\n" +
+            "    }\n" +
+            "    if (window.HTMLMediaElement && window.HTMLMediaElement.prototype && typeof window.HTMLMediaElement.prototype.canPlayType === 'function') {\n" +
+            "      var origCanPlay = window.HTMLMediaElement.prototype.canPlayType;\n" +
+            "      window.HTMLMediaElement.prototype.canPlayType = function(type) {\n" +
+            "        if (typeof type === 'string' && /av01|av1/i.test(type)) return '';\n" +
+            "        return origCanPlay.call(this, type);\n" +
+            "      };\n" +
+            "    }\n" +
+            "  } catch(e) { console.warn('[GCMV] Early codec shim err:', e); }\n"
+            : "") +
             "})();\n";
         view.evaluateJavascript(backgroundPlayShim, null);
     }

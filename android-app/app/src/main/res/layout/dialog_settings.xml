@@ -343,6 +343,45 @@
                 app:trackTint="#7E2653" />
         </LinearLayout>
 
+        <!-- Smooth Playback / Low-End Hardware -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingVertical="7dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🚀 Smooth Playback (Low-Spec / TV Box)"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Forces H.264 hardware decoding &amp; fixes video buffer pauses"
+                    android:textColor="#A09BB8"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switch_smooth_playback"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                app:thumbTint="#FF2E93"
+                app:trackTint="#7E2653" />
+        </LinearLayout>
+
         <!-- Preferred Resolution -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -563,7 +602,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Shows star markers on timeline for best music drops"
+                    android:text="Auto-skips to music drop &amp; shows timeline star"
                     android:textColor="#A09BB8"
                     android:textSize="11sp" />
             </LinearLayout>

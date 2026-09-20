@@ -12,6 +12,36 @@
   if (window.__GACHA_MV_LOADED__) return;
   window.__GACHA_MV_LOADED__ = true;
 
+  // Low-end hardware optimization: intercept MediaSource & canPlayType to block AV1 (av01)
+  // so YouTube's player uses hardware-accelerated AVC (H.264), eliminating CPU decoding lag.
+  function installCodecOptimizationShim() {
+    if (window.__GCMV_CODEC_SHIM_APPLIED__) return;
+    window.__GCMV_CODEC_SHIM_APPLIED__ = true;
+    try {
+      if (window.MediaSource && typeof window.MediaSource.isTypeSupported === "function") {
+        const origIsTypeSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
+        window.MediaSource.isTypeSupported = function (type) {
+          if (settings.smoothPlayback !== false && typeof type === "string" && /av01|av1/i.test(type)) {
+            return false;
+          }
+          return origIsTypeSupported(type);
+        };
+      }
+      if (window.HTMLMediaElement && window.HTMLMediaElement.prototype && typeof window.HTMLMediaElement.prototype.canPlayType === "function") {
+        const origCanPlay = window.HTMLMediaElement.prototype.canPlayType;
+        window.HTMLMediaElement.prototype.canPlayType = function (type) {
+          if (settings.smoothPlayback !== false && typeof type === "string" && /av01|av1/i.test(type)) {
+            return "";
+          }
+          return origCanPlay.call(this, type);
+        };
+      }
+    } catch (e) {
+      console.warn("[GCMV] Codec shim error:", e);
+    }
+  }
+  installCodecOptimizationShim();
+
   // The Android WebView injects this script into YouTube's main world, where
   // Trusted Types are enforced. Keep all HTML creation behind one private
   // policy so the same source works both there and in extension isolated worlds.
@@ -49,6 +79,41 @@
     }
   }
 
+  // Universal storage adapter: supports Firefox (browser.storage Promises)
+  // and Chromium/Android (chrome.storage callback wrapped into Promise)
+  const extStorage = {
+    get: function (defaults) {
+      if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
+        return browser.storage.local.get(defaults);
+      }
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        try {
+          return new Promise((resolve) => {
+            chrome.storage.local.get(defaults, (data) => resolve(data || defaults));
+          });
+        } catch (e) {
+          return Promise.resolve(defaults);
+        }
+      }
+      return Promise.resolve(defaults);
+    },
+    set: function (data) {
+      if (typeof browser !== "undefined" && browser.storage && browser.storage.local) {
+        return browser.storage.local.set(data);
+      }
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        try {
+          return new Promise((resolve) => {
+            chrome.storage.local.set(data, () => resolve());
+          });
+        } catch (e) {
+          return Promise.resolve();
+        }
+      }
+      return Promise.resolve();
+    }
+  };
+
   let settings = {
     enabled: true,
     blockAds: true,
@@ -56,6 +121,7 @@
     showSearchChips: true,
     autoplayGuard: true,
     autoSkipNonGacha: true,
+    smoothPlayback: true,
     filterOfficialVideos: true,
     skipNonMusic: true,
     skipIntroOutro: true,
@@ -92,6 +158,7 @@
   let activeVideoSegments = []; // Skippable active segments
   let allLoadedSegments = []; // All segments including POI & ignored
   let activePoiHighlight = null; // Current POI drop
+  let poiJumpedVideoId = ""; // Video ID where POI drop auto-jump was executed or checked
   let activeSegmentVideoId = "";
   let segmentLoadGeneration = 0;
   let isSkipping = false;
@@ -302,7 +369,7 @@
   // ==========================================================
   async function loadWhitelist() {
     try {
-      const data = await chrome.storage.local.get({ gachaWhitelist: { videoIds: [], channels: [] } });
+      const data = await extStorage.get({ gachaWhitelist: { videoIds: [], channels: [] } });
       gachaWhitelist = data.gachaWhitelist || { videoIds: [], channels: [] };
     } catch (e) {
       console.warn("[Gacha MV] Could not load whitelist", e);
@@ -321,7 +388,7 @@
     }
 
     try {
-      await chrome.storage.local.set({ gachaWhitelist });
+      await extStorage.set({ gachaWhitelist });
       showToast("🌸 Added to Gacha Whitelist! ✨");
     } catch (e) {
       console.error("[Gacha MV] Failed to save whitelist", e);
@@ -476,7 +543,7 @@
   async function setVolumeBoost(newVal, showToastMsg = false) {
     const clamped = Math.max(100, Math.min(1000, Math.round(newVal)));
     settings.volumeBoost = clamped;
-    await chrome.storage.local.set({ volumeBoost: clamped });
+    await extStorage.set({ volumeBoost: clamped });
 
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     if (video) {
@@ -903,7 +970,6 @@
         .gacha-stealth-quality-active .ytp-popup.ytp-settings-menu,
         .gacha-stealth-quality-active .ytp-settings-menu {
           opacity: 0 !important;
-          visibility: hidden !important;
           pointer-events: auto !important;
         }
       `;
@@ -938,7 +1004,9 @@
     player.classList.add("gacha-stealth-quality-active");
 
     const cleanup = () => {
-      if (settingsBtn.getAttribute("aria-expanded") === "true") {
+      const menu = document.querySelector(".ytp-popup.ytp-settings-menu, .ytp-settings-menu");
+      const isVisible = menu && (menu.style.display !== "none" && getComputedStyle(menu).display !== "none");
+      if (settingsBtn.getAttribute("aria-expanded") === "true" && isVisible) {
         settingsBtn.click();
       }
       player.classList.remove("gacha-stealth-quality-active");
@@ -949,7 +1017,7 @@
       // 1. Open settings menu
       settingsBtn.click();
 
-      // 2. Poll for main settings menu items
+      // 2. Poll for main settings menu items (up to 24 attempts * 25ms = 600ms)
       let openAttempts = 0;
       const openInterval = setInterval(() => {
         openAttempts++;
@@ -977,7 +1045,7 @@
           }
         }
 
-        if (qualityItem || openAttempts >= 12) {
+        if (qualityItem || openAttempts >= 24) {
           clearInterval(openInterval);
           if (!qualityItem) {
             cleanup();
@@ -987,7 +1055,7 @@
           // 3. Click Quality menuitem to open resolutions sub-panel
           qualityItem.click();
 
-          // 4. Poll for resolution sub-panel options
+          // 4. Poll for resolution sub-panel options (up to 28 attempts * 25ms = 700ms)
           let subAttempts = 0;
           let clickedAdvanced = false;
           const subInterval = setInterval(() => {
@@ -1064,7 +1132,7 @@
               }
             }
 
-            if (resOptions.some((o) => o.height > 0) || subAttempts >= 16) {
+            if (resOptions.some((o) => o.height > 0) || subAttempts >= 28) {
               clearInterval(subInterval);
 
               const valid = resOptions.filter((o) => o.height > 0);
@@ -1110,6 +1178,11 @@
 
               if (chosenItem) {
                 simulateClick(chosenItem);
+                const currentVid = getCurrentVideoId();
+                if (currentVid) {
+                  qualityAttemptedForVideoId = currentVid;
+                  lastAppliedResVideoId = currentVid;
+                }
                 if (chosenHeight > 0) {
                   lastAppliedResChoice = `${chosenHeight}p`;
                 }
@@ -1150,6 +1223,7 @@
       if (typeof player.setPlaybackQuality === "function") {
         try { player.setPlaybackQuality("auto"); } catch (e) {}
       }
+      qualityAttemptedForVideoId = currentVid;
       lastAppliedResVideoId = currentVid;
       lastAppliedResChoice = "auto";
       return;
@@ -1160,6 +1234,7 @@
 
     // Fast path: if video is already running at target height, no action needed
     if (video && video.videoHeight && video.videoHeight === targetHeight) {
+      qualityAttemptedForVideoId = currentVid;
       lastAppliedResVideoId = currentVid;
       lastAppliedResChoice = `${targetHeight}p`;
       return;
@@ -1236,10 +1311,6 @@
         window.localStorage.setItem("yt-player-quality", qualityPref);
       } catch (e) {}
     } catch (e) {}
-
-    qualityAttemptedForVideoId = currentVid;
-    lastAppliedResVideoId = currentVid;
-    lastAppliedResChoice = chosenCode || `${targetHeight}p`;
 
     // Modern YouTube DASH streaming requires DOM-based quality menu automation
     switchQualityViaMenu(targetHeight);
@@ -1713,7 +1784,7 @@
       settings.nasAuthToken = payload.nasAuthToken;
     }
     if (Object.keys(payload).length) {
-      await chrome.storage.local.set(payload);
+      await extStorage.set(payload);
     }
   }
 
@@ -1737,14 +1808,14 @@
 
     settings.nasServerUrl = cleanUrl;
     settings.nasAuthToken = token;
-    await chrome.storage.local.set({ nasServerUrl: cleanUrl, nasAuthToken: token });
+    await extStorage.set({ nasServerUrl: cleanUrl, nasAuthToken: token });
     const res = await nasFetch(`${cleanUrl}/api/status`);
     if (!res.ok || !res.data) {
       return { success: false, message: res.error || `HTTP ${res.status || "error"}` };
     }
 
     settings.useNasServer = true;
-    await chrome.storage.local.set({ useNasServer: true });
+    await extStorage.set({ useNasServer: true });
     const inputEl = document.querySelector("#gachaNasUrlInput");
     if (inputEl) inputEl.value = cleanUrl;
     return {
@@ -1785,7 +1856,7 @@
       const remoteDb = res.data;
       if (typeof remoteDb === "object" && remoteDb !== null && !Array.isArray(remoteDb)) {
         customSkipDb = { ...customSkipDb, ...remoteDb };
-        await chrome.storage.local.set({ customSkipDb });
+        await extStorage.set({ customSkipDb });
         showToast(`📥 Imported ${Object.keys(remoteDb).length} videos from NAS!`);
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
@@ -1803,18 +1874,22 @@
       allLoadedSegments = [];
       activePoiHighlight = null;
       activeSegmentVideoId = "";
+      poiJumpedVideoId = "";
       renderTimelineMarkers();
       updateSkipListUI();
       return;
     }
 
+    if (poiJumpedVideoId && poiJumpedVideoId !== videoId) {
+      poiJumpedVideoId = "";
+    }
     activeSegmentVideoId = videoId;
     activeVideoSegments = [];
     allLoadedSegments = [];
     activePoiHighlight = null;
 
     // Load storage settings
-    const data = await chrome.storage.local.get({
+    const data = await extStorage.get({
       customSkipDb: {},
       ignoredSegments: {},
       retimedSegments: {}
@@ -1898,6 +1973,10 @@
 
     renderTimelineMarkers();
     updateSkipListUI();
+
+    if (activePoiHighlight) {
+      attemptPoiAutoJump();
+    }
   }
 
   async function toggleIgnoreSegment(videoId, segmentId) {
@@ -1918,7 +1997,7 @@
     }
 
     try {
-      await chrome.storage.local.set({ ignoredSegments });
+      await extStorage.set({ ignoredSegments });
       showToast(nowIgnored ? "🚫 Marked segment as Incorrect / Ignored" : "✅ Restored segment to active list");
       activeSegmentVideoId = "";
       loadVideoSegments(videoId);
@@ -1943,7 +2022,7 @@
     };
 
     try {
-      await chrome.storage.local.set({ retimedSegments });
+      await extStorage.set({ retimedSegments });
       showToast("⏱️ Retimed segment saved successfully!");
       activeSegmentVideoId = "";
       loadVideoSegments(videoId);
@@ -1957,7 +2036,7 @@
     delete retimedSegments[videoId][segmentId];
 
     try {
-      await chrome.storage.local.set({ retimedSegments });
+      await extStorage.set({ retimedSegments });
       showToast("↩️ Reset to original timing");
       activeSegmentVideoId = "";
       loadVideoSegments(videoId);
@@ -1989,7 +2068,7 @@
     customSkipDb[videoId].push(segment);
 
     try {
-      await chrome.storage.local.set({ customSkipDb });
+      await extStorage.set({ customSkipDb });
 
       let nasResult = { ok: false, skipped: true };
       if (settings.useNasServer && settings.nasAutoSync && settings.nasServerUrl) {
@@ -2041,7 +2120,7 @@
     }
 
     try {
-      await chrome.storage.local.set({ customSkipDb });
+      await extStorage.set({ customSkipDb });
       if (targetId) deleteNasSegment(videoId, targetId);
       showToast("🗑️ Removed custom segment");
       activeSegmentVideoId = "";
@@ -2051,11 +2130,13 @@
     }
   }
 
-  function seekVideo(time) {
+  function seekVideo(time, suppressToast = false) {
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     if (video && !isNaN(time)) {
       video.currentTime = time;
-      showToast(`▶️ Jumped to ${formatTime(time)}`);
+      if (!suppressToast) {
+        showToast(`▶️ Jumped to ${formatTime(time)}`);
+      }
     }
   }
 
@@ -2196,6 +2277,107 @@
     }, 4500);
   }
 
+  function parseUrlTimestamp(val) {
+    if (!val) return 0;
+    val = String(val).trim();
+    if (!isNaN(val)) return parseFloat(val);
+    let seconds = 0;
+    const matchH = val.match(/(\d+)\s*h/i);
+    const matchM = val.match(/(\d+)\s*m/i);
+    const matchS = val.match(/(\d+)\s*s/i);
+    if (matchH) seconds += parseInt(matchH[1], 10) * 3600;
+    if (matchM) seconds += parseInt(matchM[1], 10) * 60;
+    if (matchS) seconds += parseInt(matchS[1], 10);
+    if (!matchH && !matchM && !matchS) {
+      const num = parseFloat(val);
+      if (!isNaN(num)) seconds = num;
+    }
+    return seconds;
+  }
+
+  function showPoiJumpToast(dropTime, originalTime) {
+    const existing = document.getElementById("gacha-unskip-toast");
+    if (existing) existing.remove();
+
+    const toast = document.createElement("div");
+    toast.id = "gacha-unskip-toast";
+    toast.className = "gacha-unskip-toast gacha-poi-toast";
+
+    const icon = document.createElement("span");
+    icon.className = "gacha-unskip-icon";
+    icon.textContent = "🌟";
+    toast.appendChild(icon);
+
+    const textDiv = document.createElement("div");
+    textDiv.className = "gacha-unskip-text";
+    const strong = document.createElement("strong");
+    strong.textContent = `Jumped to Music Drop (${formatTime(dropTime)})`;
+    const small = document.createElement("small");
+    small.textContent = `Skipped straight to the best part`;
+    textDiv.appendChild(strong);
+    textDiv.appendChild(small);
+    toast.appendChild(textDiv);
+
+    const btn = document.createElement("button");
+    btn.className = "gacha-unskip-btn";
+    btn.id = "gachaPoiUndoBtn";
+    btn.title = "Jump back to the beginning";
+    btn.textContent = "Undo ↩";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      seekVideo(originalTime, true);
+      toast.remove();
+    });
+    toast.appendChild(btn);
+
+    document.body.appendChild(toast);
+    handleFullscreenState();
+
+    setTimeout(() => {
+      if (toast && toast.parentNode) {
+        toast.classList.add("fade-out");
+        setTimeout(() => toast.remove(), 400);
+      }
+    }, 5000);
+  }
+
+  function attemptPoiAutoJump(video) {
+    if (!settings.enabled || !settings.showPoiHighlights || !activePoiHighlight) return;
+    const vid = getCurrentVideoId();
+    if (!vid || poiJumpedVideoId === vid) return;
+
+    // Drop must be meaningful (> 3s) to jump forward
+    if (activePoiHighlight.start <= 3) {
+      poiJumpedVideoId = vid;
+      return;
+    }
+
+    // Check if the URL has an explicit timestamp parameter (t= or start=)
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlTime = urlParams.get("t") || urlParams.get("start");
+    if (urlTime) {
+      const parsed = parseUrlTimestamp(urlTime);
+      if (parsed >= 3) {
+        poiJumpedVideoId = vid;
+        return;
+      }
+    }
+
+    const currentTargetVideo = video || document.querySelector("video.html5-main-video") || document.querySelector("video");
+    if (!currentTargetVideo || !currentTargetVideo.duration) return;
+
+    // Only auto-jump if video is near the beginning (under 3 seconds)
+    if (currentTargetVideo.currentTime >= 3) {
+      poiJumpedVideoId = vid;
+      return;
+    }
+
+    poiJumpedVideoId = vid;
+    const originalTime = currentTargetVideo.currentTime || 0;
+    seekVideo(activePoiHighlight.start, true);
+    showPoiJumpToast(activePoiHighlight.start, originalTime);
+  }
+
   let lastTimeUpdateCheck = 0;
 
   function handleVideoTimeUpdate(e) {
@@ -2205,7 +2387,11 @@
     lastTimeUpdateCheck = now;
 
     const video = e.target;
-    if (!video || !video.duration || isSkipping || activeVideoSegments.length === 0) return;
+    if (!video || !video.duration || isSkipping) return;
+
+    attemptPoiAutoJump(video);
+
+    if (activeVideoSegments.length === 0) return;
 
     const curTime = video.currentTime;
 
@@ -2267,6 +2453,7 @@
       if (vid && activeSegmentVideoId !== vid) {
         loadVideoSegments(vid);
       }
+      attemptPoiAutoJump();
       if (settings.autoUnmute !== false) {
         attemptAutoUnmute("play-event");
       }
@@ -2298,8 +2485,8 @@
     video.removeEventListener("canplay", handleVideoMetadataForQuality);
     video.addEventListener("canplay", handleVideoMetadataForQuality);
 
-    // Attach metadata and progress listeners for timeline markers
-    ["loadedmetadata", "durationchange", "seeked", "progress", "canplay", "playing"].forEach((evt) => {
+    // Attach metadata listeners for timeline markers (exclude progress/playing to eliminate DOM thrashing during video buffering)
+    ["loadedmetadata", "durationchange", "seeked", "canplay"].forEach((evt) => {
       video.removeEventListener(evt, renderTimelineMarkers);
       video.addEventListener(evt, renderTimelineMarkers);
     });
@@ -2451,7 +2638,7 @@
   async function init() {
     markAndroidHost();
     try {
-      const data = await chrome.storage.local.get({
+      const data = await extStorage.get({
         enabled: true,
         blockAds: true,
         showJukebox: true,
@@ -2482,7 +2669,7 @@
       if (settings.useNasServer && !settings.nasAuthToken) {
         settings.useNasServer = false;
         settings.nasAutoSync = false;
-        await chrome.storage.local.set({ useNasServer: false, nasAutoSync: false });
+        await extStorage.set({ useNasServer: false, nasAutoSync: false });
       }
       customSkipDb = data.customSkipDb || {};
       ignoredSegments = data.ignoredSegments || {};
@@ -2548,6 +2735,9 @@
     }
 
     document.body?.classList.toggle("gacha-block-ads", settings.blockAds !== false);
+    const isSmooth = settings.smoothPlayback !== false;
+    document.documentElement?.classList.toggle("gacha-smooth-playback", isSmooth);
+    document.body?.classList.toggle("gacha-smooth-playback", isSmooth);
     runAdBlockerCycle();
 
     if (settings.showSearchChips) {
@@ -2572,6 +2762,7 @@
 
       if (videoId) {
         if (activeSegmentVideoId !== videoId) {
+          poiJumpedVideoId = "";
           loadVideoSegments(videoId);
         }
       }
@@ -2582,6 +2773,7 @@
     } else {
       activeVideoSegments = [];
       activeSegmentVideoId = "";
+      poiJumpedVideoId = "";
       renderTimelineMarkers();
     }
 
@@ -3569,7 +3761,7 @@
             <label class="gacha-inpage-item" for="inpageTogglePoiHighlights">
               <div class="gacha-inpage-desc">
                 <span class="gacha-inpage-title">🌟 POI Highlights & Drops</span>
-                <span class="gacha-inpage-sub">Shows star markers at peak music drops</span>
+                <span class="gacha-inpage-sub">Auto-skips to music drop &amp; shows timeline star</span>
               </div>
               <input type="checkbox" id="inpageTogglePoiHighlights" class="gacha-inpage-switch" ${settings.showPoiHighlights ? "checked" : ""}>
             </label>
@@ -3643,6 +3835,15 @@
                 <span class="gacha-inpage-sub">Unmutes videos on load &amp; after ads</span>
               </div>
               <input type="checkbox" id="inpageToggleAutoUnmute" class="gacha-inpage-switch" ${settings.autoUnmute !== false ? "checked" : ""}>
+            </label>
+
+            <!-- Smooth Playback / Low-End Hardware -->
+            <label class="gacha-inpage-item" for="inpageToggleSmoothPlayback">
+              <div class="gacha-inpage-desc">
+                <span class="gacha-inpage-title">🚀 Smooth Playback (Low-Spec / TV Box)</span>
+                <span class="gacha-inpage-sub">Forces H.264 hardware decoding &amp; fixes buffer pauses</span>
+              </div>
+              <input type="checkbox" id="inpageToggleSmoothPlayback" class="gacha-inpage-switch" ${settings.smoothPlayback !== false ? "checked" : ""}>
             </label>
 
             <!-- Preferred Resolution -->
@@ -3743,6 +3944,7 @@
     const btnNasImport = widget.querySelector("#gachaBtnNasImport");
     const inpageToggleAutoplayGuard = widget.querySelector("#inpageToggleAutoplayGuard");
     const inpageToggleAutoUnmute = widget.querySelector("#inpageToggleAutoUnmute");
+    const inpageToggleSmoothPlayback = widget.querySelector("#inpageToggleSmoothPlayback");
     const inpageSelectResolution = widget.querySelector("#inpageSelectResolution");
     const inpageToggleSearchChips = widget.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = widget.querySelector("#inpageToggleFilterOfficial");
@@ -3914,7 +4116,7 @@
     if (inpageToggleMaster) {
       inpageToggleMaster.addEventListener("change", async (e) => {
         const isEnabled = e.target.checked;
-        await chrome.storage.local.set({ enabled: isEnabled });
+        await extStorage.set({ enabled: isEnabled });
         showToast(isEnabled ? "🌸 Gacha MV Mode Enabled!" : "⏸️ Gacha MV Mode Disabled");
       });
     }
@@ -3922,7 +4124,7 @@
     if (inpageToggleBlockAds) {
       inpageToggleBlockAds.addEventListener("change", async (e) => {
         const isBlocked = e.target.checked;
-        await chrome.storage.local.set({ blockAds: isBlocked });
+        await extStorage.set({ blockAds: isBlocked });
         settings.blockAds = isBlocked;
         document.body?.classList.toggle("gacha-block-ads", settings.enabled && settings.blockAds !== false);
         runAdBlockerCycle();
@@ -3932,14 +4134,14 @@
 
     if (inpageToggleAutoSkip) {
       inpageToggleAutoSkip.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ autoSkipNonGacha: e.target.checked });
+        await extStorage.set({ autoSkipNonGacha: e.target.checked });
         showToast(e.target.checked ? "⏭️ Non-Gacha Auto-Skip ON" : "⏭️ Auto-Skip OFF");
       });
     }
 
     if (inpageToggleSkipNonMusic) {
       inpageToggleSkipNonMusic.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ skipNonMusic: e.target.checked });
+        await extStorage.set({ skipNonMusic: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3947,7 +4149,7 @@
 
     if (inpageToggleSkipIntroOutro) {
       inpageToggleSkipIntroOutro.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ skipIntroOutro: e.target.checked });
+        await extStorage.set({ skipIntroOutro: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3955,7 +4157,7 @@
 
     if (inpageToggleSkipSponsor) {
       inpageToggleSkipSponsor.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ skipSponsor: e.target.checked });
+        await extStorage.set({ skipSponsor: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3963,7 +4165,7 @@
 
     if (inpageTogglePoiHighlights) {
       inpageTogglePoiHighlights.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ showPoiHighlights: e.target.checked });
+        await extStorage.set({ showPoiHighlights: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3971,7 +4173,7 @@
 
     if (inpageToggleSponsorBlock) {
       inpageToggleSponsorBlock.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ useSponsorBlockApi: e.target.checked });
+        await extStorage.set({ useSponsorBlockApi: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3979,7 +4181,7 @@
 
     if (inpageToggleCustomDb) {
       inpageToggleCustomDb.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ useCustomDb: e.target.checked });
+        await extStorage.set({ useCustomDb: e.target.checked });
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
       });
@@ -3992,12 +4194,12 @@
         if (isNas && (!nasUrlInput?.value.trim() || !nasTokenInput?.value.trim())) {
           e.target.checked = false;
           if (nasDetails) nasDetails.classList.remove("gacha-hidden");
-          await chrome.storage.local.set({ useNasServer: false });
+          await extStorage.set({ useNasServer: false });
           showToast("⚠️ Enter the NAS URL and token, then test the connection");
           return;
         }
         if (nasDetails) nasDetails.classList.toggle("gacha-hidden", !isNas);
-        await chrome.storage.local.set({ useNasServer: isNas });
+        await extStorage.set({ useNasServer: isNas });
         showToast(isNas ? "🏠 Connected to NAS DB Mode" : "🏠 NAS DB Disabled");
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
@@ -4009,7 +4211,7 @@
       const token = nasTokenInput ? nasTokenInput.value.trim() : "";
       settings.nasServerUrl = url;
       settings.nasAuthToken = token;
-      await chrome.storage.local.set({ nasServerUrl: url, nasAuthToken: token });
+      await extStorage.set({ nasServerUrl: url, nasAuthToken: token });
       if (reloadSegments) {
         activeSegmentVideoId = "";
         loadVideoSegments(new URLSearchParams(window.location.search).get("v"));
@@ -4052,7 +4254,7 @@
 
     if (inpageToggleNasAutoSync) {
       inpageToggleNasAutoSync.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ nasAutoSync: e.target.checked });
+        await extStorage.set({ nasAutoSync: e.target.checked });
       });
     }
 
@@ -4066,14 +4268,14 @@
 
     if (inpageToggleAutoplayGuard) {
       inpageToggleAutoplayGuard.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ autoplayGuard: e.target.checked });
+        await extStorage.set({ autoplayGuard: e.target.checked });
         showToast(e.target.checked ? "🛡️ Autoplay Guard ON" : "🛡️ Autoplay Guard OFF");
       });
     }
 
     if (inpageToggleAutoUnmute) {
       inpageToggleAutoUnmute.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ autoUnmute: e.target.checked });
+        await extStorage.set({ autoUnmute: e.target.checked });
         showToast(e.target.checked ? "🔊 Auto Unmute ON" : "🔇 Auto Unmute OFF");
         if (e.target.checked) {
           attemptAutoUnmute("toggle-enabled");
@@ -4081,10 +4283,21 @@
       });
     }
 
+    if (inpageToggleSmoothPlayback) {
+      inpageToggleSmoothPlayback.addEventListener("change", async (e) => {
+        const isSmooth = e.target.checked;
+        await extStorage.set({ smoothPlayback: isSmooth });
+        settings.smoothPlayback = isSmooth;
+        document.documentElement?.classList.toggle("gacha-smooth-playback", isSmooth);
+        document.body?.classList.toggle("gacha-smooth-playback", isSmooth);
+        showToast(isSmooth ? "🚀 Smooth Playback ON (H.264 HW Mode)" : "🚀 Smooth Playback OFF");
+      });
+    }
+
     if (inpageSelectResolution) {
       inpageSelectResolution.addEventListener("change", async (e) => {
         const newRes = e.target.value;
-        await chrome.storage.local.set({ preferredResolution: newRes });
+        await extStorage.set({ preferredResolution: newRes });
         settings.preferredResolution = newRes;
         lastAppliedResChoice = "";
         qualityAttemptedForVideoId = "";
@@ -4095,7 +4308,7 @@
 
     if (inpageToggleSearchChips) {
       inpageToggleSearchChips.addEventListener("change", async (e) => {
-        await chrome.storage.local.set({ showSearchChips: e.target.checked });
+        await extStorage.set({ showSearchChips: e.target.checked });
       });
     }
 
@@ -4215,6 +4428,7 @@
     const inpageToggleNasAutoSync = document.querySelector("#inpageToggleNasAutoSync");
     const inpageToggleAutoplayGuard = document.querySelector("#inpageToggleAutoplayGuard");
     const inpageToggleAutoUnmute = document.querySelector("#inpageToggleAutoUnmute");
+    const inpageToggleSmoothPlayback = document.querySelector("#inpageToggleSmoothPlayback");
     const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
     const inpageToggleSearchChips = document.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = document.querySelector("#inpageToggleFilterOfficial");
@@ -4236,6 +4450,7 @@
     if (inpageToggleNasAutoSync) inpageToggleNasAutoSync.checked = settings.nasAutoSync;
     if (inpageToggleAutoplayGuard) inpageToggleAutoplayGuard.checked = settings.autoplayGuard;
     if (inpageToggleAutoUnmute) inpageToggleAutoUnmute.checked = settings.autoUnmute !== false;
+    if (inpageToggleSmoothPlayback) inpageToggleSmoothPlayback.checked = settings.smoothPlayback !== false;
     if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
     if (inpageToggleSearchChips) inpageToggleSearchChips.checked = settings.showSearchChips;
     if (inpageToggleFilterOfficial) inpageToggleFilterOfficial.checked = settings.filterOfficialVideos;
@@ -4663,74 +4878,90 @@
   // ==========================================================
   // Storage & Navigation Listeners
   // ==========================================================
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === "local") {
-      let changed = false;
-      for (const key of [
-        "enabled",
-        "blockAds",
-        "showJukebox",
-        "showSearchChips",
-        "autoplayGuard",
-        "autoSkipNonGacha",
-        "filterOfficialVideos",
-        "skipNonMusic",
-        "skipIntroOutro",
-        "skipSponsor",
-        "showPoiHighlights",
-        "useSponsorBlockApi",
-        "useCustomDb",
-        "useNasServer",
-        "nasServerUrl",
-        "nasAuthToken",
-        "nasAutoSync",
-        "volumeBoost",
-        "autoUnmute",
-        "preferredResolution"
-      ]) {
-        if (changes[key] !== undefined) {
-          settings[key] = changes[key].newValue;
+  const storageChangeApi = (typeof browser !== "undefined" && browser.storage && browser.storage.onChanged)
+    ? browser.storage.onChanged
+    : (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged ? chrome.storage.onChanged : null);
+
+  if (storageChangeApi) {
+    storageChangeApi.addListener((changes, areaName) => {
+      if (areaName === "local") {
+        let changed = false;
+        for (const key of [
+          "enabled",
+          "blockAds",
+          "showJukebox",
+          "showSearchChips",
+          "autoplayGuard",
+          "autoSkipNonGacha",
+          "filterOfficialVideos",
+          "skipNonMusic",
+          "skipIntroOutro",
+          "skipSponsor",
+          "showPoiHighlights",
+          "useSponsorBlockApi",
+          "useCustomDb",
+          "useNasServer",
+          "nasServerUrl",
+          "nasAuthToken",
+          "nasAutoSync",
+          "volumeBoost",
+          "autoUnmute",
+          "smoothPlayback",
+          "preferredResolution"
+        ]) {
+          if (changes[key] !== undefined) {
+            settings[key] = changes[key].newValue;
+            changed = true;
+          }
+        }
+        if (changes.smoothPlayback !== undefined) {
+          settings.smoothPlayback = changes.smoothPlayback.newValue !== false;
+          const isSmooth = settings.smoothPlayback;
+          document.documentElement?.classList.toggle("gacha-smooth-playback", isSmooth);
+          document.body?.classList.toggle("gacha-smooth-playback", isSmooth);
+          const inpageToggleSmoothPlayback = document.querySelector("#inpageToggleSmoothPlayback");
+          if (inpageToggleSmoothPlayback) inpageToggleSmoothPlayback.checked = isSmooth;
+        }
+        if (changes.autoUnmute !== undefined && changes.autoUnmute.newValue) {
+          attemptAutoUnmute("storage-enabled");
+        }
+        if (changes.volumeBoost !== undefined) {
+          settings.volumeBoost = changes.volumeBoost.newValue;
+          applyVolumeBoostGain();
+          updateInpageVolumeBoostUI();
+        }
+        if (changes.preferredResolution !== undefined) {
+          lastAppliedResChoice = "";
+          qualityAttemptedForVideoId = "";
+          applyPreferredResolution("storage-changed");
+          const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
+          if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
+        }
+        if (changes.customSkipDb !== undefined) {
+          customSkipDb = changes.customSkipDb.newValue || {};
+          activeSegmentVideoId = ""; // Force reload segments
           changed = true;
         }
+        if (changes.ignoredSegments !== undefined) {
+          ignoredSegments = changes.ignoredSegments.newValue || {};
+          activeSegmentVideoId = "";
+          changed = true;
+        }
+        if (changes.retimedSegments !== undefined) {
+          retimedSegments = changes.retimedSegments.newValue || {};
+          activeSegmentVideoId = "";
+          changed = true;
+        }
+        if (changes.gachaWhitelist !== undefined) {
+          gachaWhitelist = changes.gachaWhitelist.newValue || { videoIds: [], channels: [] };
+          changed = true;
+        }
+        if (changed) {
+          applyFeatures();
+        }
       }
-      if (changes.autoUnmute !== undefined && changes.autoUnmute.newValue) {
-        attemptAutoUnmute("storage-enabled");
-      }
-      if (changes.preferredResolution !== undefined) {
-        lastAppliedResChoice = "";
-        qualityAttemptedForVideoId = "";
-        applyPreferredResolution("storage-changed");
-        const inpageSelectResolution = document.querySelector("#inpageSelectResolution");
-        if (inpageSelectResolution) inpageSelectResolution.value = settings.preferredResolution || "auto";
-      }
-      if (changes.volumeBoost !== undefined) {
-        applyVolumeBoostGain();
-        updateInpageVolumeBoostUI();
-      }
-      if (changes.customSkipDb !== undefined) {
-        customSkipDb = changes.customSkipDb.newValue || {};
-        activeSegmentVideoId = ""; // Force reload segments
-        changed = true;
-      }
-      if (changes.ignoredSegments !== undefined) {
-        ignoredSegments = changes.ignoredSegments.newValue || {};
-        activeSegmentVideoId = "";
-        changed = true;
-      }
-      if (changes.retimedSegments !== undefined) {
-        retimedSegments = changes.retimedSegments.newValue || {};
-        activeSegmentVideoId = "";
-        changed = true;
-      }
-      if (changes.gachaWhitelist !== undefined) {
-        gachaWhitelist = changes.gachaWhitelist.newValue || { videoIds: [], channels: [] };
-        changed = true;
-      }
-      if (changed) {
-        applyFeatures();
-      }
-    }
-  });
+    });
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return;

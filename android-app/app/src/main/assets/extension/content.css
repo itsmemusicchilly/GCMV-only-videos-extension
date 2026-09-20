@@ -40,6 +40,19 @@ html.gacha-android-app #gacha-floating-widget .gacha-panel {
 }
 
 /* ==========================================================
+   Smooth Playback (Low-Spec / TV Box Optimizations)
+   ========================================================== */
+html.gacha-smooth-playback .ytp-ambient-lighting,
+html.gacha-smooth-playback .html5-video-player.ytp-ambient-lighting canvas,
+html.gacha-smooth-playback #cinematics,
+html.gacha-smooth-playback ytd-watch-flexy[theater] #cinematics,
+body.gacha-smooth-playback #cinematics {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+/* ==========================================================
    YouTube Quick Filter Chips Bar (In-Content Placement)
    ========================================================== */
 #gacha-search-chips-bar {
@@ -178,6 +191,33 @@ html.gacha-android-app #gacha-floating-widget .gacha-panel {
 .gacha-unskip-btn:hover {
   background: #00f0ff;
   color: #0d0a1a;
+  transform: scale(1.05);
+}
+
+/* POI Music Drop Auto-Jump Toast Notification */
+.gacha-unskip-toast.gacha-poi-toast {
+  border-color: #ffd700;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6), 0 0 18px rgba(255, 215, 0, 0.35);
+}
+
+.gacha-unskip-toast.gacha-poi-toast .gacha-unskip-icon {
+  color: #ffd700;
+}
+
+.gacha-unskip-toast.gacha-poi-toast .gacha-unskip-text small {
+  color: #ffd700;
+}
+
+.gacha-unskip-toast.gacha-poi-toast .gacha-unskip-btn {
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.25), rgba(255, 110, 199, 0.3));
+  border-color: #ffd700;
+  color: #ffffff;
+}
+
+.gacha-unskip-toast.gacha-poi-toast .gacha-unskip-btn:hover {
+  background: #ffd700;
+  color: #0d0a1a;
+  box-shadow: 0 0 12px rgba(255, 215, 0, 0.6);
   transform: scale(1.05);
 }
 
