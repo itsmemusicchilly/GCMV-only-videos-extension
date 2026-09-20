@@ -204,11 +204,57 @@ document.addEventListener("DOMContentLoaded", async () => {
       toggleRemoteServer.checked = settings.remoteServerEnabled !== false;
       if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", settings.remoteServerEnabled === false);
     }
-    if (popupRemoteUrlInput) {
-      popupRemoteUrlInput.value = settings.remoteServerUrl || "http://127.0.0.1:3000/remote";
-    }
+    discoverAndSetRemoteUrl();
   } catch (err) {
     console.error("[Gacha MV] Failed to load settings:", err);
+  }
+
+  const popupRemoteQrBox = document.getElementById("popupRemoteQrBox");
+  const popupRemoteQrContainer = document.getElementById("popupRemoteQrContainer");
+
+  function renderPopupQrCode(url) {
+    if (!popupRemoteQrBox || !url) return;
+    try {
+      if (typeof qrcode === "function") {
+        const qr = qrcode(0, "M");
+        qr.addData(url);
+        qr.make();
+        popupRemoteQrBox.innerHTML = qr.createSvgTag({ scalable: true });
+        if (popupRemoteQrContainer) popupRemoteQrContainer.classList.remove("hidden");
+      }
+    } catch (e) {
+      console.warn("[GCMV] QR render error:", e);
+    }
+  }
+
+  async function discoverAndSetRemoteUrl() {
+    let bestUrl = settings.remoteServerUrl || "";
+    // Probe common local ports to find running remote server and get its real LAN IP
+    const probePorts = [3000, 3001, 3002, 8080, 8081];
+    for (const port of probePorts) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.serverUrl) {
+            bestUrl = data.serverUrl;
+            break;
+          } else if (data && data.ip) {
+            bestUrl = `http://${data.ip}:${port}/remote`;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!bestUrl) {
+      bestUrl = settings.remoteServerUrl || "http://127.0.0.1:3000/remote";
+    }
+
+    if (popupRemoteUrlInput) {
+      popupRemoteUrlInput.value = bestUrl;
+    }
+    renderPopupQrCode(bestUrl);
   }
 
   // Update UI appearance according to enabled status

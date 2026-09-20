@@ -1,10 +1,17 @@
 package com.itsmemusicchilly.gachamvplayer;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import java.util.Locale;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -155,13 +162,60 @@ public class RemoteServerManager {
     }
 
     public String getLocalIpAddress() {
+        // 1. Modern Android: ConnectivityManager with active Network and LinkProperties
         try {
-            // First check Wi-Fi manager
-            WifiManager wm = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Network activeNetwork = cm.getActiveNetwork();
+                    if (activeNetwork != null) {
+                        LinkProperties lp = cm.getLinkProperties(activeNetwork);
+                        if (lp != null) {
+                            for (LinkAddress la : lp.getLinkAddresses()) {
+                                InetAddress addr = la.getAddress();
+                                if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                    String host = addr.getHostAddress();
+                                    if (host != null && !host.startsWith("127.")) {
+                                        return host;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check all available networks if activeNetwork didn't yield an IPv4 address
+                    for (Network net : cm.getAllNetworks()) {
+                        NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                        if (caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                                             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                            LinkProperties lp = cm.getLinkProperties(net);
+                            if (lp != null) {
+                                for (LinkAddress la : lp.getLinkAddresses()) {
+                                    InetAddress addr = la.getAddress();
+                                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                        String host = addr.getHostAddress();
+                                        if (host != null && !host.startsWith("127.")) {
+                                            return host;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ConnectivityManager IP resolution failed: " + t.getMessage());
+        }
+
+        // 2. WifiManager fallback
+        try {
+            WifiManager wm = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wm != null && wm.getConnectionInfo() != null) {
                 int ipInt = wm.getConnectionInfo().getIpAddress();
                 if (ipInt != 0) {
                     return String.format(
+                            Locale.US,
                             "%d.%d.%d.%d",
                             (ipInt & 0xff),
                             (ipInt >> 8 & 0xff),
@@ -170,20 +224,66 @@ public class RemoteServerManager {
                     );
                 }
             }
+        } catch (Throwable t) {
+            Log.w(TAG, "WifiManager IP resolution failed: " + t.getMessage());
+        }
 
-            // Fallback: iterate network interfaces
+        // 3. Fallback: iterate NetworkInterface, wrapping each individual interface in try/catch
+        try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            for (NetworkInterface nif : Collections.list(interfaces)) {
-                if (nif.isLoopback() || !nif.isUp()) continue;
-                for (InetAddress addr : Collections.list(nif.getInetAddresses())) {
-                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
-                        return addr.getHostAddress();
-                    }
+            if (interfaces != null) {
+                List<NetworkInterface> nifs = Collections.list(interfaces);
+
+                // Pass 1: Prioritize wlan, eth, en interfaces
+                for (NetworkInterface nif : nifs) {
+                    try {
+                        String name = nif.getName().toLowerCase(Locale.US);
+                        if (!name.startsWith("wlan") && !name.startsWith("eth") && !name.startsWith("en") && !name.startsWith("ap")) {
+                            continue;
+                        }
+                        for (InetAddress addr : Collections.list(nif.getInetAddresses())) {
+                            if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                String host = addr.getHostAddress();
+                                if (host != null && !host.startsWith("127.")) {
+                                    return host;
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
+                // Pass 2: Any site-local IPv4 address (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+                for (NetworkInterface nif : nifs) {
+                    try {
+                        for (InetAddress addr : Collections.list(nif.getInetAddresses())) {
+                            if (addr instanceof Inet4Address && !addr.isLoopbackAddress() && addr.isSiteLocalAddress()) {
+                                String host = addr.getHostAddress();
+                                if (host != null && !host.startsWith("127.")) {
+                                    return host;
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
+                // Pass 3: Any non-loopback IPv4
+                for (NetworkInterface nif : nifs) {
+                    try {
+                        for (InetAddress addr : Collections.list(nif.getInetAddresses())) {
+                            if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                String host = addr.getHostAddress();
+                                if (host != null && !host.startsWith("127.")) {
+                                    return host;
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {}
                 }
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Error resolving IP", e);
+        } catch (Throwable t) {
+            Log.e(TAG, "NetworkInterface enumeration failed", t);
         }
+
         return "127.0.0.1";
     }
 
@@ -349,6 +449,9 @@ public class RemoteServerManager {
             if ("/api/status".equals(path)) {
                 JSONObject res = new JSONObject();
                 res.put("status", "ok");
+                res.put("serverUrl", getServerUrl());
+                res.put("ip", getLocalIpAddress());
+                res.put("port", boundPort);
                 res.put("pinRequired", pinRequired);
                 res.put("currentVideo", new JSONObject()
                         .put("videoId", currentVideoId)
@@ -357,6 +460,18 @@ public class RemoteServerManager {
                         .put("volume", currentVolume));
                 res.put("queue", new JSONArray(getQueueJson()));
                 sendResponse(out, 200, "application/json", res.toString());
+                return;
+            }
+
+            // API: QR Code Image
+            if ("/api/qr".equals(path) || "/qr.png".equals(path)) {
+                String serverUrl = getServerUrl();
+                byte[] qrBytes = QRCodeUtil.generateQrPngBytes(serverUrl, 350, 350);
+                if (qrBytes != null && qrBytes.length > 0) {
+                    sendByteResponse(out, 200, "image/png", qrBytes);
+                } else {
+                    sendResponse(out, 500, "text/plain", "Error generating QR");
+                }
                 return;
             }
 
@@ -490,6 +605,19 @@ public class RemoteServerManager {
                     "Access-Control-Allow-Origin: *\r\n" +
                     "Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n" +
                     "Access-Control-Allow-Headers: Content-Type, Authorization, X-GCMV-PIN\r\n" +
+                    "Connection: close\r\n\r\n";
+            out.write(header.getBytes(StandardCharsets.UTF_8));
+            out.write(bytes);
+            out.flush();
+        } catch (Exception ignored) {}
+    }
+
+    private void sendByteResponse(OutputStream out, int statusCode, String contentType, byte[] bytes) {
+        try {
+            String header = "HTTP/1.1 " + statusCode + " " + getStatusText(statusCode) + "\r\n" +
+                    "Content-Type: " + contentType + "\r\n" +
+                    "Content-Length: " + bytes.length + "\r\n" +
+                    "Access-Control-Allow-Origin: *\r\n" +
                     "Connection: close\r\n\r\n";
             out.write(header.getBytes(StandardCharsets.UTF_8));
             out.write(bytes);

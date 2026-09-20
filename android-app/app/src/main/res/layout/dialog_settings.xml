@@ -971,6 +971,35 @@
                     app:cornerRadius="16dp" />
             </LinearLayout>
 
+            <!-- QR Code Section -->
+            <LinearLayout
+                android:id="@+id/layout_remote_qr"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="10dp"
+                android:background="#120E24"
+                android:padding="12dp">
+
+                <ImageView
+                    android:id="@+id/iv_remote_qr"
+                    android:layout_width="160dp"
+                    android:layout_height="160dp"
+                    android:background="#FFFFFF"
+                    android:padding="8dp"
+                    android:contentDescription="Remote QR Code" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="📷 Scan with your phone camera"
+                    android:textColor="#C5C0D8"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
             <!-- PIN Toggle & Input -->
             <LinearLayout
                 android:layout_width="match_parent"

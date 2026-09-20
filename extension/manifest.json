@@ -47,6 +47,7 @@
         "*://youtube.com/*"
       ],
       "js": [
+        "content/qrcode.min.js",
         "content/content.js"
       ],
       "css": [

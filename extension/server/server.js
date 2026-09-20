@@ -65,12 +65,63 @@ let currentPlayback = {
   volume: 100
 };
 
+let qrcodeLib = null;
+try {
+  qrcodeLib = require("./qrcode.min.js");
+} catch (e) {
+  try {
+    qrcodeLib = require("../lib/qrcode.min.js");
+  } catch (e2) {}
+}
+
 function getLocalIp() {
   try {
     const interfaces = os.networkInterfaces();
+    const isVirtual = (name) => {
+      const lower = name.toLowerCase();
+      return (
+        lower.includes("docker") ||
+        lower.includes("vbox") ||
+        lower.includes("vmnet") ||
+        lower.includes("virbr") ||
+        lower.includes("veth") ||
+        lower.includes("tailscale") ||
+        lower.includes("tun") ||
+        lower.includes("tap") ||
+        lower.includes("dummy")
+      );
+    };
+
+    // Pass 1: Physical Wi-Fi or Ethernet adapters (wlan, eth, en, wi-fi)
+    for (const name of Object.keys(interfaces)) {
+      if (isVirtual(name)) continue;
+      const lower = name.toLowerCase();
+      if (lower.startsWith("wlan") || lower.startsWith("eth") || lower.startsWith("en") || lower.includes("wi-fi")) {
+        for (const net of interfaces[name]) {
+          const isV4 = net.family === "IPv4" || net.family === 4;
+          if (isV4 && !net.internal && net.address !== "127.0.0.1") {
+            return net.address;
+          }
+        }
+      }
+    }
+
+    // Pass 2: Any non-virtual adapter with site-local address (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    for (const name of Object.keys(interfaces)) {
+      if (isVirtual(name)) continue;
+      for (const net of interfaces[name]) {
+        const isV4 = net.family === "IPv4" || net.family === 4;
+        if (isV4 && !net.internal && net.address !== "127.0.0.1") {
+          return net.address;
+        }
+      }
+    }
+
+    // Pass 3: Any non-internal IPv4
     for (const name of Object.keys(interfaces)) {
       for (const net of interfaces[name]) {
-        if (net.family === "IPv4" && !net.internal) {
+        const isV4 = net.family === "IPv4" || net.family === 4;
+        if (isV4 && !net.internal && net.address !== "127.0.0.1") {
           return net.address;
         }
       }
@@ -489,12 +540,18 @@ const server = http.createServer((req, res) => {
       });
     }
 
+    const localIp = getLocalIp();
+    const serverUrl = `http://${localIp}:${boundPort}/remote`;
+
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
         status: "online",
         service: "Gacha MV Player Remote & NAS Server",
         version: "1.0.3.3",
+        serverUrl: serverUrl,
+        ip: localIp,
+        port: boundPort,
         pinRequired: serverConfig.pinRequired && Boolean(serverConfig.remotePin),
         currentVideo: currentPlayback,
         queue: queue,
@@ -503,6 +560,29 @@ const server = http.createServer((req, res) => {
         timestamp: new Date().toISOString()
       })
     );
+    return;
+  }
+
+  // 2b. QR Code generation (SVG)
+  if (req.method === "GET" && (pathname === "/api/qr" || pathname === "/qr.svg")) {
+    const localIp = getLocalIp();
+    const serverUrl = `http://${localIp}:${boundPort}/remote`;
+    if (qrcodeLib) {
+      try {
+        const qr = qrcodeLib(0, "M");
+        qr.addData(serverUrl);
+        qr.make();
+        const svg = qr.createSvgTag({ scalable: true });
+        res.writeHead(200, {
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Access-Control-Allow-Origin": "*"
+        });
+        res.end(svg);
+        return;
+      } catch (e) {}
+    }
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end("QR Generator unavailable");
     return;
   }
 

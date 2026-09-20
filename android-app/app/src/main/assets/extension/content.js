@@ -3920,6 +3920,10 @@
                     <input type="text" id="inpageRemoteUrlInput" class="gacha-time-input" readonly value="Loading...">
                     <button type="button" class="gacha-btn-nas-test" id="btnInpageCopyRemoteUrl">📋 Copy</button>
                   </div>
+                  <div id="inpageRemoteQrContainer" style="text-align: center; margin-top: 10px; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px;">
+                    <div id="inpageRemoteQrBox" style="width: 140px; height: 140px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
+                    <div style="font-size: 11px; color: #a09bb8; margin-top: 6px;">📷 Scan with phone camera to open</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4131,24 +4135,76 @@
       };
     }
 
+    const inpageRemoteQrBox = widget.querySelector("#inpageRemoteQrBox");
+    const inpageRemoteQrContainer = widget.querySelector("#inpageRemoteQrContainer");
+
+    function renderInpageQrCode(url) {
+      if (!inpageRemoteQrBox || !url || url === "Server Stopped") {
+        if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.add("gacha-hidden");
+        return;
+      }
+      try {
+        if (typeof qrcode === "function") {
+          const qr = qrcode(0, "M");
+          qr.addData(url);
+          qr.make();
+          inpageRemoteQrBox.innerHTML = qr.createSvgTag({ scalable: true });
+          if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.remove("gacha-hidden");
+        } else {
+          inpageRemoteQrBox.innerHTML = `<img src="${url.replace(/\/remote\/?$/, "")}/api/qr" style="width: 100%; height: 100%; object-fit: contain;" alt="QR Code" />`;
+          if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.remove("gacha-hidden");
+        }
+      } catch (e) {
+        console.warn("[GCMV] QR render error:", e);
+      }
+    }
+
     if (inpageRemoteUrlInput) {
       if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
         const u = window.AndroidBridge.getRemoteServerUrl();
         inpageRemoteUrlInput.value = u || "Server Stopped";
+        renderInpageQrCode(u);
       } else {
-        inpageRemoteUrlInput.value = settings.remoteServerUrl || `http://${window.location.hostname || "127.0.0.1"}:3000/remote`;
+        (async () => {
+          let bestUrl = settings.remoteServerUrl || "";
+          if (!bestUrl) {
+            const probePorts = [3000, 3001, 3002, 8080, 8081];
+            for (const port of probePorts) {
+              try {
+                const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store" });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data && data.serverUrl) {
+                    bestUrl = data.serverUrl;
+                    break;
+                  } else if (data && data.ip) {
+                    bestUrl = `http://${data.ip}:${port}/remote`;
+                    break;
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+          if (!bestUrl) {
+            bestUrl = "http://127.0.0.1:3000/remote";
+          }
+          inpageRemoteUrlInput.value = bestUrl;
+          renderInpageQrCode(bestUrl);
+        })();
       }
     }
 
-    if (btnInpageCopyRemoteUrl) {
-      btnInpageCopyRemoteUrl.onclick = () => {
-        if (inpageRemoteUrlInput && inpageRemoteUrlInput.value) {
-          navigator.clipboard.writeText(inpageRemoteUrlInput.value).then(() => {
-            showToast("📋 Remote URL copied to clipboard! 🌸");
-          }).catch(() => {});
-        }
-      };
-    }
+    const copyInpageUrl = () => {
+      if (inpageRemoteUrlInput && inpageRemoteUrlInput.value && inpageRemoteUrlInput.value !== "Server Stopped" && inpageRemoteUrlInput.value !== "Loading...") {
+        navigator.clipboard.writeText(inpageRemoteUrlInput.value).then(() => {
+          showToast("📋 Remote URL copied to clipboard! 🌸");
+        }).catch(() => {});
+      }
+    };
+
+    if (btnInpageCopyRemoteUrl) btnInpageCopyRemoteUrl.onclick = copyInpageUrl;
+    if (inpageRemoteQrBox) inpageRemoteQrBox.onclick = copyInpageUrl;
+    if (inpageRemoteUrlInput) inpageRemoteUrlInput.onclick = copyInpageUrl;
 
     if (inpageToggleRemote) {
       inpageToggleRemote.onchange = async (e) => {

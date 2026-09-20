@@ -32,6 +32,7 @@ import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.Spinner;
@@ -352,29 +353,47 @@ public class MainActivity extends AppCompatActivity {
         if (etNasToken != null) etNasToken.setText(nasToken);
         if (swNasAutoSync != null) swNasAutoSync.setChecked(nasAutoSync);
 
+        ImageView ivRemoteQr = view.findViewById(R.id.iv_remote_qr);
+        View layoutRemoteQr = view.findViewById(R.id.layout_remote_qr);
+
+        Runnable refreshRemoteUi = () -> {
+            if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                String url = remoteServerManager.getServerUrl();
+                if (tvRemoteUrl != null) tvRemoteUrl.setText(url);
+                if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.VISIBLE);
+                if (ivRemoteQr != null) {
+                    Bitmap bmp = QRCodeUtil.generateQrBitmap(url, 400, 400);
+                    if (bmp != null) {
+                        ivRemoteQr.setImageBitmap(bmp);
+                    }
+                }
+            } else {
+                if (tvRemoteUrl != null) tvRemoteUrl.setText("Server Stopped");
+                if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.GONE);
+            }
+        };
+
         if (swRemote != null) swRemote.setChecked(remoteEnabled);
         if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(remoteEnabled ? View.VISIBLE : View.GONE);
-        if (tvRemoteUrl != null) {
+        refreshRemoteUi.run();
+
+        View.OnClickListener copyUrlListener = v -> {
             if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                tvRemoteUrl.setText(remoteServerManager.getServerUrl());
-            } else {
-                tvRemoteUrl.setText("Server Stopped");
-            }
-        }
-        if (btnCopyRemoteUrl != null) {
-            btnCopyRemoteUrl.setOnClickListener(v -> {
-                if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                    String url = remoteServerManager.getServerUrl();
-                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) {
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Remote Control URL", url));
-                        Toast.makeText(this, "📋 Remote URL copied to clipboard!", Toast.LENGTH_SHORT).show();
-                    }
-                } else {
-                    Toast.makeText(this, "Remote server is stopped", Toast.LENGTH_SHORT).show();
+                String url = remoteServerManager.getServerUrl();
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Remote Control URL", url));
+                    Toast.makeText(this, "📋 Remote URL copied to clipboard: " + url, Toast.LENGTH_SHORT).show();
                 }
-            });
-        }
+            } else {
+                Toast.makeText(this, "Remote server is stopped", Toast.LENGTH_SHORT).show();
+            }
+        };
+
+        if (btnCopyRemoteUrl != null) btnCopyRemoteUrl.setOnClickListener(copyUrlListener);
+        if (tvRemoteUrl != null) tvRemoteUrl.setOnClickListener(copyUrlListener);
+        if (ivRemoteQr != null) ivRemoteQr.setOnClickListener(copyUrlListener);
+
         if (swRemotePin != null) swRemotePin.setChecked(remotePinEnabled);
         if (layoutPinInput != null) layoutPinInput.setVisibility(remotePinEnabled ? View.VISIBLE : View.GONE);
         if (etRemotePin != null) etRemotePin.setText(remotePin);
@@ -466,16 +485,16 @@ public class MainActivity extends AppCompatActivity {
                 if (remoteServerManager != null && !remoteServerManager.isRunning()) {
                     remoteServerManager.start(8080);
                     mainHandler.postDelayed(() -> {
-                        if (tvRemoteUrl != null && remoteServerManager != null) {
-                            tvRemoteUrl.setText(remoteServerManager.getServerUrl());
-                        }
+                        refreshRemoteUi.run();
                     }, 500);
+                } else {
+                    refreshRemoteUi.run();
                 }
             } else {
                 if (remoteServerManager != null && remoteServerManager.isRunning()) {
                     remoteServerManager.stop();
-                    if (tvRemoteUrl != null) tvRemoteUrl.setText("Server Stopped");
                 }
+                refreshRemoteUi.run();
             }
         });
 

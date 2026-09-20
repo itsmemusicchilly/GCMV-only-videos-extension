@@ -492,10 +492,17 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             with queue_lock:
                 q_copy = list(queue)
 
+            local_ip = get_local_ip()
+            bound_port = server_port
+            server_url = f"http://{local_ip}:{bound_port}/remote"
+
             resp = {
                 "status": "online",
                 "service": "Gacha MV Player Python Remote & NAS Server",
                 "version": "1.0.3.3",
+                "serverUrl": server_url,
+                "ip": local_ip,
+                "port": bound_port,
                 "pinRequired": server_config.get("pinRequired") and bool(server_config.get("remotePin")),
                 "currentVideo": current_playback,
                 "queue": q_copy,
