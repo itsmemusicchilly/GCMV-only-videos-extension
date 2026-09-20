@@ -1098,12 +1098,13 @@ public class RemoteServerManager {
                 "      const sResults = document.getElementById('searchResults');\n" +
                 "      sResults.innerHTML = '<div style=\"color:var(--subtext); text-align:center; padding:15px;\">🔍 Searching...</div>';\n" +
                 "      const res = await api('/api/search?q=' + encodeURIComponent(q));\n" +
-                "      if (!res || !res.results || res.results.length === 0) {\n" +
+                "      const results = Array.isArray(res) ? res : (res?.results || []);\n" +
+                "      if (!results || results.length === 0) {\n" +
                 "        sResults.innerHTML = '<div style=\"color:var(--subtext); text-align:center; padding:15px;\">No results found</div>';\n" +
                 "        return;\n" +
                 "      }\n" +
-                "      window._lastSearchResults = res.results;\n" +
-                "      sResults.innerHTML = res.results.map((item, idx) => `\n" +
+                "      window._lastSearchResults = results;\n" +
+                "      sResults.innerHTML = results.map((item, idx) => `\n" +
                 "        <div class=\"search-item\">\n" +
                 "          <div class=\"search-thumb-row\">\n" +
                 "            <img class=\"search-thumb\" src=\"${item.thumbnail || ''}\" alt=\"\" onerror=\"this.style.display='none'\">\n" +
@@ -1113,20 +1114,21 @@ public class RemoteServerManager {
                 "            </div>\n" +
                 "          </div>\n" +
                 "          <div class=\"btn-grid\">\n" +
-                "            <button class=\"btn-act btn-now\" onclick=\"actionSearchResult('${item.id}', ${idx}, 'play_now')\">▶️ Play Now</button>\n" +
-                "            <button class=\"btn-act btn-next\" onclick=\"actionSearchResult('${item.id}', ${idx}, 'play_next')\">⏭️ Play Next</button>\n" +
-                "            <button class=\"btn-act btn-queue\" onclick=\"actionSearchResult('${item.id}', ${idx}, 'add_queue')\">➕ Add Queue</button>\n" +
+                "            <button class=\"btn-act btn-now\" onclick=\"actionSearchResult('${item.videoId || item.id}', ${idx}, 'play_now')\">▶️ Play Now</button>\n" +
+                "            <button class=\"btn-act btn-next\" onclick=\"actionSearchResult('${item.videoId || item.id}', ${idx}, 'play_next')\">⏭️ Play Next</button>\n" +
+                "            <button class=\"btn-act btn-queue\" onclick=\"actionSearchResult('${item.videoId || item.id}', ${idx}, 'add_queue')\">➕ Add Queue</button>\n" +
                 "          </div>\n" +
                 "        </div>\n" +
                 "      `).join('');\n" +
                 "    }\n" +
                 "\n" +
                 "    window.actionSearchResult = async function(id, idx, action) {\n" +
-                "      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || { id: id };\n" +
+                "      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || { videoId: id, id: id };\n" +
+                "      const targetId = item.videoId || item.id || id;\n" +
                 "      const res = await api('/api/queue', {\n" +
                 "        method: 'POST',\n" +
                 "        headers: { 'Content-Type': 'application/json' },\n" +
-                "        body: JSON.stringify({ url: item.id || id, title: item.title, action: action, pin: currentPin })\n" +
+                "        body: JSON.stringify({ url: targetId, title: item.title, action: action, pin: currentPin })\n" +
                 "      });\n" +
                 "      if (res && res.success) {\n" +
                 "        const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued next!' : '➕ Added to queue!';\n" +

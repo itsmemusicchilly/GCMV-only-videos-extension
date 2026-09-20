@@ -5169,6 +5169,8 @@
       } catch (e) {}
     }
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentVideoId = urlParams.get("v") || getCurrentVideoId() || "";
     const isMix =
       window.location.search.includes("list=") ||
       Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
@@ -5229,7 +5231,7 @@
       );
 
       if (!recommendations || recommendations.length === 0) {
-        if (retryCount < 4) {
+        if (!isExplicitSkip && retryCount < 4) {
           retryCount++;
           setTimeout(evaluateRecommendations, 350);
           return;

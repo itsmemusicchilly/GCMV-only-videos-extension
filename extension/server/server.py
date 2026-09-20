@@ -463,12 +463,13 @@ def get_web_remote_html(pin_required):
       const sResults = document.getElementById('searchResults');
       sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">🔍 Searching...</div>';
       const res = await api('/api/search?q=' + encodeURIComponent(q));
-      if (!res || !res.results || res.results.length === 0) {{
+      const results = Array.isArray(res) ? res : (res?.results || []);
+      if (!results || results.length === 0) {{
         sResults.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">No results found</div>';
         return;
       }}
-      window._lastSearchResults = res.results;
-      sResults.innerHTML = res.results.map((item, idx) => `
+      window._lastSearchResults = results;
+      sResults.innerHTML = results.map((item, idx) => `
         <div class="search-item">
           <div class="search-thumb-row">
             <img class="search-thumb" src="${{item.thumbnail || ''}}" alt="" onerror="this.style.display='none'">
@@ -478,20 +479,21 @@ def get_web_remote_html(pin_required):
             </div>
           </div>
           <div class="btn-grid">
-            <button class="btn-act btn-now" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'play_now')">▶️ Play Now</button>
-            <button class="btn-act btn-next" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'play_next')">⏭️ Play Next</button>
-            <button class="btn-act btn-queue" onclick="actionSearchResult('${{item.id}}', ${{idx}}, 'add_queue')">➕ Add Queue</button>
+            <button class="btn-act btn-now" onclick="actionSearchResult('${{item.videoId || item.id}}', ${{idx}}, 'play_now')">▶️ Play Now</button>
+            <button class="btn-act btn-next" onclick="actionSearchResult('${{item.videoId || item.id}}', ${{idx}}, 'play_next')">⏭️ Play Next</button>
+            <button class="btn-act btn-queue" onclick="actionSearchResult('${{item.videoId || item.id}}', ${{idx}}, 'add_queue')">➕ Add Queue</button>
           </div>
         </div>
       `).join('');
     }}
 
     window.actionSearchResult = async function(id, idx, action) {{
-      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || {{ id: id }};
+      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || {{ videoId: id, id: id }};
+      const targetId = item.videoId || item.id || id;
       const res = await api('/api/queue', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ url: item.id || id, title: item.title, action: action, pin: currentPin }})
+        body: JSON.stringify({{ url: targetId, title: item.title, action: action, pin: currentPin }})
       }});
       if (res && res.success) {{
         const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued next!' : '➕ Added to queue!';
