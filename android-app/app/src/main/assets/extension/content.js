@@ -2516,6 +2516,10 @@
       if (vid && activeSegmentVideoId !== vid) {
         loadVideoSegments(vid);
       }
+      if (vid) {
+        recordRecentPlayedVideoId(vid);
+      }
+      ensureYoutubeAutoplayToggleOn();
       attemptPoiAutoJump();
       if (settings.autoUnmute !== false) {
         attemptAutoUnmute("play-event");
@@ -2828,6 +2832,7 @@
 
     if (isWatch) {
       setupVideoPlayerListeners();
+      ensureYoutubeAutoplayToggleOn();
 
       if (videoId) {
         if (activeSegmentVideoId !== videoId) {
@@ -4935,6 +4940,87 @@
   // ==========================================================
   // Autoplay Guard (Strictly selects Gacha / Gacha Lyric MVs)
   // ==========================================================
+  const CURATED_GACHA_FALLBACK_POOL = [
+    { id: "1eV8vgTFv5k", title: "Dynasty - GCMV" },
+    { id: "L4_X300rLGE", title: "Monster - GCMV" },
+    { id: "3Q3zL1cQ8jA", title: "Legends Never Die - GLMV" },
+    { id: "WcO_S5rZ7Gg", title: "Play Date - GLMV" },
+    { id: "kJQP7kiw5Fk", title: "Despacito - GLMV" },
+    { id: "RgKAFK5djSk", title: "See You Again - GLMV" },
+    { id: "OPf0YbXqDm0", title: "Uptown Funk - GCMV" },
+    { id: "2Vv-BfVoq4g", title: "Perfect - GLMV" },
+    { id: "fJ9rUzIMcZQ", title: "Queen - GCMV" },
+    { id: "fKopy74weus", title: "Thunder - GLMV" },
+    { id: "7PCkvCPvDXk", title: "Believer - GLMV" },
+    { id: "hT_nvWreIhg", title: "Counting Stars - GCMV" },
+    { id: "JGwWNGJdvx8", title: "Shape of You - GLMV" },
+    { id: "CevxZvSJLk8", title: "Roar - GLMV" },
+    { id: "YQHsXMglC9A", title: "Hello - GLMV" },
+    { id: "kXYiU_JCYtU", title: "Numb - GCMV" },
+    { id: "09R8_2nJtjg", title: "Sugar - GCMV" },
+    { id: "60ItHLz5WEA", title: "Faded - GLMV" },
+    { id: "YykjpeuMNEk", title: "Hymn for the Weekend - GCMV" },
+    { id: "aJOTlE1K90k", title: "Darkside - GLMV" }
+  ];
+
+  async function getRecentPlayedVideoIds() {
+    try {
+      const data = await extStorage.get({ recentPlayedVideoIds: [] });
+      return Array.isArray(data.recentPlayedVideoIds) ? data.recentPlayedVideoIds : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function recordRecentPlayedVideoId(videoId) {
+    if (!videoId) return;
+    try {
+      let list = await getRecentPlayedVideoIds();
+      list = list.filter((id) => id !== videoId);
+      list.unshift(videoId);
+      if (list.length > 15) {
+        list = list.slice(0, 15);
+      }
+      await extStorage.set({ recentPlayedVideoIds: list });
+    } catch (e) {}
+  }
+
+  function ensureYoutubeAutoplayToggleOn() {
+    if (!settings.enabled || !settings.autoplayGuard) return;
+
+    try {
+      // 1. Desktop YouTube HTML5 player
+      const desktopToggle = document.querySelector(".ytp-autonav-toggle-button");
+      const desktopBtn = document.querySelector("button[data-tooltip-target-id='ytp-autonav-toggle-button'], button.ytp-autonav-toggle-button");
+      const targetBtn = desktopBtn || desktopToggle?.closest("button");
+
+      if (desktopToggle) {
+        const isChecked = desktopToggle.getAttribute("aria-checked") === "true" ||
+                          targetBtn?.getAttribute("aria-checked") === "true" ||
+                          (targetBtn?.getAttribute("aria-label") || "").toLowerCase().includes("autoplay is on");
+        if (!isChecked) {
+          (targetBtn || desktopToggle).click();
+        }
+      }
+
+      // 2. Mobile YouTube web (m.youtube.com)
+      const mobileToggle = document.querySelector(
+        "#autonav-toggle-button, ytm-autonav-toggle-button button, button.autonav-toggle-button, button[aria-label*='Autoplay'], button[aria-label*='autoplay']"
+      );
+      if (mobileToggle) {
+        const isPressed = mobileToggle.getAttribute("aria-pressed") === "true" ||
+                          mobileToggle.getAttribute("aria-checked") === "true" ||
+                          (mobileToggle.getAttribute("aria-label") || "").toLowerCase().includes("turn off autoplay") ||
+                          (mobileToggle.getAttribute("aria-label") || "").toLowerCase().includes("autoplay is on");
+        if (!isPressed) {
+          mobileToggle.click();
+        }
+      }
+    } catch (e) {
+      console.warn("[GCMV] ensureYoutubeAutoplayToggleOn error:", e);
+    }
+  }
+
   function setupAutoplayGuard() {
     const video =
       document.querySelector("video.html5-main-video") || document.querySelector("video");
@@ -4943,11 +5029,14 @@
     video.removeEventListener("ended", handleVideoEnded);
     if (settings.autoplayGuard) {
       video.addEventListener("ended", handleVideoEnded);
+      ensureYoutubeAutoplayToggleOn();
     }
   }
 
   async function checkAndEnforceGachaNext() {
     if (!settings.enabled || !settings.autoplayGuard) return;
+
+    ensureYoutubeAutoplayToggleOn();
 
     // 1. Check for queued video from Android APK Bridge
     if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {
@@ -4957,6 +5046,7 @@
           const item = JSON.parse(queuedJson);
           if (item && item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
+            recordRecentPlayedVideoId(item.videoId);
             window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
             return;
           }
@@ -4975,6 +5065,7 @@
           const data = await res.json();
           if (data && data.item && data.item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
+            recordRecentPlayedVideoId(data.item.videoId);
             window.location.href = "https://" + window.location.host + "/watch?v=" + data.item.videoId;
             return;
           }
@@ -4987,7 +5078,7 @@
       Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
 
     const urlParams = new URLSearchParams(window.location.search);
-    const currentVideoId = urlParams.get("v") || "";
+    const currentVideoId = urlParams.get("v") || getCurrentVideoId();
 
     // If in a mix/playlist, check if the next video is non-Gacha and needs skipping
     if (isMix) {
@@ -4997,22 +5088,24 @@
         skipTargetInMix.element.click();
         return;
       }
-      // If the next track is already Gacha (or playlist end), let YouTube play naturally!
+      // If the next track is already Gacha (or playlist end), ensure autoplay toggle is active
+      ensureYoutubeAutoplayToggleOn();
       return;
     }
 
     let retryCount = 0;
-    function evaluateRecommendations() {
+    async function evaluateRecommendations() {
       const recommendations = document.querySelectorAll(
         "ytd-compact-video-renderer, ytd-video-renderer, ytd-rich-item-renderer, ytm-compact-video-renderer, ytm-video-with-context-renderer, ytm-rich-item-renderer, ytm-watch-next-video-renderer, ytm-media-item, .compact-media-item, .media-item"
       );
 
       if (!recommendations || recommendations.length === 0) {
-        if (retryCount < 5) {
+        if (retryCount < 4) {
           retryCount++;
-          setTimeout(evaluateRecommendations, 400);
+          setTimeout(evaluateRecommendations, 350);
           return;
         }
+        await playCuratedFallback();
         return;
       }
 
@@ -5034,6 +5127,19 @@
 
       if (isGachaVideo(firstTitle, firstChannel, "", firstVideoId)) {
         showToast("✨ Next up: " + firstTitle.substring(0, 35) + "...");
+        if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
+        // Guarantee auto-advance: if YouTube doesn't navigate within 1.2s, trigger it
+        setTimeout(() => {
+          const vid = document.querySelector("video.html5-main-video") || document.querySelector("video");
+          const nowVid = getCurrentVideoId();
+          if (nowVid === currentVideoId && (vid?.ended || vid?.paused)) {
+            if (firstLink && typeof firstLink.click === "function") {
+              firstLink.click();
+            } else if (firstVideoId) {
+              window.location.href = "https://" + window.location.host + "/watch?v=" + firstVideoId;
+            }
+          }
+        }, 1200);
         return;
       }
 
@@ -5056,19 +5162,44 @@
         }
 
         if (isGachaVideo(title, channel, "", recVideoId)) {
-          if (link && link.href) {
+          if (link && (link.href || typeof link.click === "function")) {
             foundGacha = true;
             showToast("🛡️ Gacha Guard: Auto-playing " + title.substring(0, 30) + "... 🌸");
-            link.click();
+            if (recVideoId) recordRecentPlayedVideoId(recVideoId);
+            if (typeof link.click === "function") {
+              link.click();
+            } else {
+              window.location.href = link.href;
+            }
             break;
           }
         }
       }
 
-      // If no Gacha video found in sidebar recommendations after waiting, query fresh GCMV queue
+      // If no Gacha video found in recommendations, play curated fallback
       if (!foundGacha) {
-        showToast("🌸 Gacha Guard: Loading fresh GCMV queue...");
-        executeYoutubeSearch("Trending GCMV GLMV");
+        await playCuratedFallback();
+      }
+    }
+
+    async function playCuratedFallback() {
+      try {
+        const recents = await getRecentPlayedVideoIds();
+        let pool = CURATED_GACHA_FALLBACK_POOL.filter(
+          (item) => !recents.includes(item.id) && item.id !== currentVideoId
+        );
+        if (pool.length === 0) {
+          pool = CURATED_GACHA_FALLBACK_POOL.filter((item) => item.id !== currentVideoId);
+        }
+        if (pool.length === 0) {
+          pool = CURATED_GACHA_FALLBACK_POOL;
+        }
+        const picked = pool[Math.floor(Math.random() * pool.length)];
+        showToast("🌸 Gacha Autoplay: Up next ➔ " + picked.title);
+        recordRecentPlayedVideoId(picked.id);
+        window.location.href = "https://" + window.location.host + "/watch?v=" + picked.id;
+      } catch (err) {
+        console.warn("[GCMV] Error in playCuratedFallback:", err);
       }
     }
 
