@@ -135,7 +135,11 @@
     nasAutoSync: false,
     volumeBoost: 100,
     autoUnmute: true,
-    preferredResolution: "auto"
+    preferredResolution: "auto",
+    remoteServerEnabled: true,
+    remoteServerUrl: "",
+    remotePinEnabled: false,
+    remotePin: ""
   };
 
   let gachaWhitelist = {
@@ -2444,6 +2448,65 @@
     ensureAudioContextResumed();
   }
 
+  function reportPlaybackStateToRemote() {
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const videoId = getCurrentVideoId();
+    if (!videoId) return;
+
+    const titleEl = document.querySelector("h1.title, h1.ytm-watch-video-title, #title h1, .slim-video-information-title, yt-formatted-string.ytd-watch-metadata");
+    const title = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, "").trim();
+    const isPlaying = video ? !video.paused && !video.ended : false;
+    const volume = video ? Math.round(video.volume * 100) : 100;
+
+    if (window.AndroidBridge && typeof window.AndroidBridge.updateCurrentPlayback === "function") {
+      try {
+        window.AndroidBridge.updateCurrentPlayback(videoId, title, isPlaying, volume);
+      } catch (e) {}
+    } else {
+      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      fetch(serverUrl + "/api/playback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, title, isPlaying, volume })
+      }).catch(() => {});
+    }
+  }
+
+  let remotePollInterval = null;
+  function startRemoteControlPolling() {
+    if (window.AndroidBridge) return; // AndroidBridge handles controls natively!
+    if (remotePollInterval) clearInterval(remotePollInterval);
+
+    remotePollInterval = setInterval(async () => {
+      if (!settings.enabled || settings.remoteServerEnabled === false) return;
+      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      try {
+        const res = await fetch(serverUrl + "/api/control/poll", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && Array.isArray(data.actions) && data.actions.length > 0) {
+          const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+          for (const item of data.actions) {
+            if (item.action === "play" && video) {
+              video.play().catch(() => {});
+            } else if (item.action === "pause" && video) {
+              video.pause();
+            } else if (item.action === "next") {
+              const nextBtn = document.querySelector(".ytp-next-button, [data-testid=\"next-button\"], .player-controls-next");
+              if (nextBtn) nextBtn.click();
+              else checkAndEnforceGachaNext();
+            } else if (item.action === "play_now" && item.videoId) {
+              showToast("📱 Remote: Playing ➔ " + (item.title || item.videoId) + " 🌸");
+              window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
+            } else if (item.action === "volume" && video && typeof item.value === "number") {
+              video.volume = Math.max(0, Math.min(100, item.value)) / 100;
+            }
+          }
+        }
+      } catch (e) {}
+    }, 1500);
+  }
+
   function handleVideoPlayEvents() {
     if (settings.enabled) {
       if (settings.autoSkipNonGacha) {
@@ -2458,6 +2521,7 @@
         attemptAutoUnmute("play-event");
       }
       applyPreferredResolution("play-event");
+      reportPlaybackStateToRemote();
     }
   }
 
@@ -2659,6 +2723,10 @@
         volumeBoost: 100,
         autoUnmute: true,
         preferredResolution: "auto",
+        remoteServerEnabled: true,
+        remoteServerUrl: "",
+        remotePinEnabled: false,
+        remotePin: "",
         customSkipDb: {},
         ignoredSegments: {},
         retimedSegments: {}
@@ -2683,6 +2751,7 @@
     setupManualMuteDetection();
     applyFeatures();
     setupFullscreenListener();
+    startRemoteControlPolling();
 
     startStillWatchingGuard();
     document.addEventListener("visibilitychange", () => {
@@ -3584,6 +3653,17 @@
             </div>
           </div>
 
+          <!-- Active Remote Queue Section -->
+          <div class="gacha-panel-queue-box" id="inpageQueueBox" style="background:#211a3e; border-radius:12px; padding:10px; margin-bottom:12px; border:1px solid rgba(0, 229, 255, 0.25);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-size:12px; font-weight:700; color:#00e5ff;">📋 Active Remote Queue (<span id="inpageQueueCount">0</span>)</span>
+              <button type="button" id="btnInpageClearQueue" style="background:none; border:none; color:#ff2e93; font-size:11px; font-weight:700; cursor:pointer;">Clear</button>
+            </div>
+            <div id="inpageQueueItems" style="max-height:120px; overflow-y:auto;">
+              <div style="color:#a09bb8; font-size:11px; font-style:italic;">No queued videos. Send one from your phone!</div>
+            </div>
+          </div>
+
           <div class="gacha-panel-search">
             <input type="text" id="gachaPanelSearchInput" placeholder="Search any song as GCMV..." />
             <button id="gachaPanelSearchBtn">Go</button>
@@ -3819,6 +3899,26 @@
               </div>
             </div>
 
+            <!-- Phone Remote & Queue Card -->
+            <div class="gacha-nas-box" style="margin-top:10px;">
+              <label class="gacha-inpage-item" for="inpageToggleRemote">
+                <div class="gacha-inpage-desc">
+                  <span class="gacha-inpage-title">📱 Phone Remote Control &amp; Queue</span>
+                  <span class="gacha-inpage-sub">Add songs &amp; control playback from phone</span>
+                </div>
+                <input type="checkbox" id="inpageToggleRemote" class="gacha-inpage-switch" ${settings.remoteServerEnabled !== false ? "checked" : ""}>
+              </label>
+              <div id="inpageRemoteDetails" class="gacha-nas-details">
+                <div class="gacha-nas-input-group">
+                  <label>Remote Web URL:</label>
+                  <div class="gacha-nas-input-row">
+                    <input type="text" id="inpageRemoteUrlInput" class="gacha-time-input" readonly value="Loading...">
+                    <button type="button" class="gacha-btn-nas-test" id="btnInpageCopyRemoteUrl">📋 Copy</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Autoplay Guard -->
             <label class="gacha-inpage-item" for="inpageToggleAutoplayGuard">
               <div class="gacha-inpage-desc">
@@ -3949,6 +4049,114 @@
     const inpageToggleSearchChips = widget.querySelector("#inpageToggleSearchChips");
     const inpageToggleFilterOfficial = widget.querySelector("#inpageToggleFilterOfficial");
 
+    const inpageQueueCount = widget.querySelector("#inpageQueueCount");
+    const inpageQueueItems = widget.querySelector("#inpageQueueItems");
+    const btnInpageClearQueue = widget.querySelector("#btnInpageClearQueue");
+    const inpageToggleRemote = widget.querySelector("#inpageToggleRemote");
+    const inpageRemoteDetails = widget.querySelector("#inpageRemoteDetails");
+    const inpageRemoteUrlInput = widget.querySelector("#inpageRemoteUrlInput");
+    const btnInpageCopyRemoteUrl = widget.querySelector("#btnInpageCopyRemoteUrl");
+
+    async function refreshInpageQueue() {
+      if (!inpageQueueItems || !inpageQueueCount) return;
+      let items = [];
+      if (window.AndroidBridge && typeof window.AndroidBridge.getQueueJson === "function") {
+        try {
+          items = JSON.parse(window.AndroidBridge.getQueueJson()) || [];
+        } catch (e) {}
+      } else {
+        const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+        try {
+          const res = await fetch(serverUrl + "/api/queue", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            items = data.queue || [];
+          }
+        } catch (e) {}
+      }
+
+      inpageQueueCount.textContent = items.length;
+      if (items.length === 0) {
+        inpageQueueItems.innerHTML = '<div style="color:#a09bb8; font-size:11px; font-style:italic; padding:4px 0;">No queued videos. Send one from your phone!</div>';
+      } else {
+        inpageQueueItems.innerHTML = items.map((it, idx) => `
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
+            <span style="font-size:11px; font-weight:bold; color:#00e5ff; margin-right:6px;">${idx + 1}.</span>
+            <span style="font-size:11px; color:#fff; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${it.title || it.videoId}</span>
+            <button type="button" class="btn-inpage-play-now" data-vid="${it.videoId}" data-id="${it.id}" style="background:none; border:none; color:#00ffaa; font-size:11px; font-weight:bold; cursor:pointer; padding:2px 6px;">▶ Play</button>
+            <button type="button" class="btn-inpage-del-item" data-id="${it.id}" style="background:none; border:none; color:#ff4444; font-size:11px; cursor:pointer; padding:2px 4px;">✕</button>
+          </div>
+        `).join("");
+
+        inpageQueueItems.querySelectorAll(".btn-inpage-play-now").forEach(btn => {
+          btn.onclick = () => {
+            const vid = btn.getAttribute("data-vid");
+            const qId = btn.getAttribute("data-id");
+            if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
+              window.AndroidBridge.removeQueueItem(qId);
+            }
+            window.location.href = "/watch?v=" + vid;
+          };
+        });
+
+        inpageQueueItems.querySelectorAll(".btn-inpage-del-item").forEach(btn => {
+          btn.onclick = async () => {
+            const qId = btn.getAttribute("data-id");
+            if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
+              window.AndroidBridge.removeQueueItem(qId);
+            } else {
+              const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+              await fetch(serverUrl + "/api/queue?id=" + encodeURIComponent(qId), { method: "DELETE" }).catch(() => {});
+            }
+            refreshInpageQueue();
+          };
+        });
+      }
+    }
+
+    if (btnInpageClearQueue) {
+      btnInpageClearQueue.onclick = async () => {
+        if (window.AndroidBridge && typeof window.AndroidBridge.clearQueue === "function") {
+          window.AndroidBridge.clearQueue();
+        } else {
+          const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+          await fetch(serverUrl + "/api/queue", { method: "DELETE" }).catch(() => {});
+        }
+        refreshInpageQueue();
+      };
+    }
+
+    if (inpageRemoteUrlInput) {
+      if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
+        const u = window.AndroidBridge.getRemoteServerUrl();
+        inpageRemoteUrlInput.value = u || "Server Stopped";
+      } else {
+        inpageRemoteUrlInput.value = settings.remoteServerUrl || `http://${window.location.hostname || "127.0.0.1"}:3000/remote`;
+      }
+    }
+
+    if (btnInpageCopyRemoteUrl) {
+      btnInpageCopyRemoteUrl.onclick = () => {
+        if (inpageRemoteUrlInput && inpageRemoteUrlInput.value) {
+          navigator.clipboard.writeText(inpageRemoteUrlInput.value).then(() => {
+            showToast("📋 Remote URL copied to clipboard! 🌸");
+          }).catch(() => {});
+        }
+      };
+    }
+
+    if (inpageToggleRemote) {
+      inpageToggleRemote.onchange = async (e) => {
+        const isRemote = e.target.checked;
+        settings.remoteServerEnabled = isRemote;
+        if (inpageRemoteDetails) inpageRemoteDetails.classList.toggle("gacha-hidden", !isRemote);
+        await extStorage.set({ remoteServerEnabled: isRemote });
+        if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
+          window.AndroidBridge.savePref("remoteServerEnabled", JSON.stringify(isRemote));
+        }
+      };
+    }
+
     const btnCurStart = widget.querySelector("#gachaBtnCurStart");
     const btnCurEnd = widget.querySelector("#gachaBtnCurEnd");
     const inputStart = widget.querySelector("#gachaAddStart");
@@ -3967,6 +4175,7 @@
       if (bd) bd.classList.add("active");
 
       if (activePanelTab === "music") {
+        refreshInpageQueue();
         setTimeout(() => {
           const sInput = document.getElementById("gachaPanelSearchInput");
           if (sInput) sInput.focus();
@@ -4099,6 +4308,7 @@
       if (tabName === "music") {
         if (tabMusic) tabMusic.classList.add("active");
         if (contentMusic) contentMusic.classList.remove("gacha-hidden");
+        refreshInpageQueue();
       } else if (tabName === "skiplist") {
         if (tabSkipList) tabSkipList.classList.add("active");
         if (contentSkipList) contentSkipList.classList.remove("gacha-hidden");
@@ -4736,8 +4946,41 @@
     }
   }
 
-  function checkAndEnforceGachaNext() {
+  async function checkAndEnforceGachaNext() {
     if (!settings.enabled || !settings.autoplayGuard) return;
+
+    // 1. Check for queued video from Android APK Bridge
+    if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {
+      try {
+        const queuedJson = window.AndroidBridge.popNextQueuedVideo();
+        if (queuedJson) {
+          const item = JSON.parse(queuedJson);
+          if (item && item.videoId) {
+            showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
+            window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[GCMV] Error popping queued video from bridge:", e);
+      }
+    }
+
+    // 2. Check for queued video from Desktop Remote Server
+    if (!window.AndroidBridge && (settings.remoteServerEnabled !== false || settings.useNasServer)) {
+      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      try {
+        const res = await fetch(serverUrl + "/api/queue?pop=true", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.item && data.item.videoId) {
+            showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
+            window.location.href = "https://" + window.location.host + "/watch?v=" + data.item.videoId;
+            return;
+          }
+        }
+      } catch (e) {}
+    }
 
     const isMix =
       window.location.search.includes("list=") ||

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gacha MV Player - Standalone Python 3 NAS Database Server
+Gacha MV Player - Standalone Python 3 NAS Database & Local Wi-Fi Remote Server
 Zero external dependencies! Runs with standard library on any Python 3.7+ system.
 """
 
@@ -8,29 +8,97 @@ import http.server
 import json
 import os
 import urllib.parse
+import urllib.request
 import sys
 import time
 import random
 import hmac
 import re
 import math
+import socket
+import threading
 
 PORT = int(os.environ.get("PORT", 3000))
-BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
+BIND_HOST = os.environ.get("BIND_HOST", "0.0.0.0")
 AUTH_TOKEN = os.environ.get("NAS_AUTH_TOKEN", "").strip()
 ALLOWED_ORIGINS = {origin.strip() for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",") if origin.strip()}
 MAX_BODY_BYTES = 1024 * 1024
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_FILE = os.path.join(DATA_DIR, "database.json")
-
-if not AUTH_TOKEN:
-    print("[NAS Server] NAS_AUTH_TOKEN is required. Refusing to start without authentication.", file=sys.stderr)
-    sys.exit(1)
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump({}, f, indent=2)
+
+server_config = {
+    "pinRequired": bool(os.environ.get("REMOTE_PIN")),
+    "remotePin": os.environ.get("REMOTE_PIN", "").strip()
+}
+
+if os.path.exists(CONFIG_FILE):
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                server_config.update(loaded)
+    except Exception:
+        pass
+
+def save_config(cfg):
+    try:
+        server_config.update(cfg)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(server_config, f, indent=2)
+    except Exception as e:
+        print(f"[Server] Error saving config: {e}")
+
+# In-Memory Queue & Controls
+queue_lock = threading.Lock()
+queue = []
+pending_controls = []
+current_playback = {
+    "videoId": "",
+    "title": "No video playing",
+    "isPlaying": False,
+    "volume": 100
+}
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def extract_youtube_video_id(input_str):
+    if not input_str or not isinstance(input_str, str):
+        return None
+    s = input_str.strip()
+    if re.fullmatch(r"[a-zA-Z0-9_-]{11}", s):
+        return s
+    m = re.search(r"(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})", s)
+    if m:
+        return m.group(1)
+    return None
+
+def fetch_video_title_async(item):
+    def run():
+        try:
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={item['videoId']}&format=json"
+            req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if "title" in data:
+                        item["title"] = data["title"]
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
 
 def read_db():
     try:
@@ -80,25 +148,278 @@ def is_allowed_origin(origin):
         return False
     return re.fullmatch(r"(?:chrome|moz)-extension://[A-Za-z0-9_-]+", origin) is not None or origin in ALLOWED_ORIGINS
 
+def get_web_remote_html(pin_required):
+    pin_modal = """
+  <div id="pinOverlay" class="pin-overlay">
+    <div class="pin-card">
+      <h2 style="font-size:18px; margin-bottom:6px;">🔒 Remote PIN Required</h2>
+      <p style="font-size:12px; color:var(--subtext);">Enter the 4-digit PIN configured in Player Settings</p>
+      <input type="password" id="pinInput" class="pin-input" maxlength="8" placeholder="••••" autofocus>
+      <button id="btnSubmitPin" class="pin-btn">Unlock Remote</button>
+    </div>
+  </div>""" if pin_required else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🌸 Gacha MV Remote</title>
+  <style>
+    :root {{
+      --bg: #0d0a1a;
+      --card-bg: #16122a;
+      --card-border: rgba(255, 46, 147, 0.25);
+      --pink: #ff2e93;
+      --cyan: #00e5ff;
+      --green: #00ffaa;
+      --text: #ffffff;
+      --subtext: #a09bb8;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+    body {{ background: var(--bg); color: var(--text); padding: 14px; min-height: 100vh; }}
+    header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--card-border); }}
+    h1 {{ font-size: 19px; color: var(--text); font-weight: 800; display: flex; align-items: center; gap: 6px; }}
+    .badge {{ font-size: 11px; background: rgba(0,255,170,0.15); color: var(--green); border: 1px solid var(--green); border-radius: 12px; padding: 3px 8px; font-weight: 700; }}
+    .card {{ background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }}
+    .card-title {{ font-size: 13px; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }}
+    .now-playing-title {{ font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; margin-bottom: 12px; word-break: break-word; }}
+    .ctrl-row {{ display: flex; gap: 10px; margin-top: 10px; }}
+    .btn-ctrl {{ flex: 1; height: 46px; border: none; border-radius: 12px; background: rgba(255,255,255,0.08); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px; }}
+    .btn-ctrl:active {{ transform: scale(0.96); background: rgba(255,255,255,0.18); }}
+    .btn-primary {{ background: linear-gradient(135deg, var(--pink), #8f00ff); color: #fff; }}
+    .btn-accent {{ background: rgba(0, 229, 255, 0.2); border: 1px solid var(--cyan); color: var(--cyan); }}
+    .input-box {{ width: 100%; height: 46px; background: #211a3e; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 0 14px; color: #fff; font-size: 14px; margin-bottom: 10px; outline: none; }}
+    .input-box:focus {{ border-color: var(--pink); box-shadow: 0 0 10px rgba(255,46,147,0.3); }}
+    .btn-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }}
+    .btn-act {{ height: 42px; border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s; }}
+    .btn-act:active {{ transform: scale(0.96); }}
+    .btn-now {{ background: var(--pink); color: #fff; }}
+    .btn-next {{ background: #6b21a8; color: #fff; border: 1px solid #a855f7; }}
+    .btn-queue {{ background: rgba(0,229,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }}
+    .queue-item {{ display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }}
+    .queue-num {{ font-size: 12px; font-weight: 800; color: var(--cyan); margin-right: 10px; min-width: 18px; }}
+    .queue-title {{ font-size: 13px; font-weight: 600; color: #eee; flex: 1; word-break: break-word; }}
+    .queue-del {{ background: none; border: none; color: #ff4444; font-size: 16px; padding: 6px; cursor: pointer; }}
+    .queue-empty {{ color: var(--subtext); font-size: 13px; font-style: italic; text-align: center; padding: 18px 0; }}
+    .vol-wrap {{ display: flex; align-items: center; gap: 10px; margin-top: 14px; }}
+    .vol-slider {{ flex: 1; accent-color: var(--pink); }}
+    .toast {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2e1b4e; border: 1px solid var(--pink); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; box-shadow: 0 4px 15px rgba(0,0,0,0.5); opacity: 0; pointer-events: none; transition: opacity 0.25s ease; z-index: 100; }}
+    .toast.show {{ opacity: 1; }}
+    /* PIN Modal */
+    .pin-overlay {{ position: fixed; inset: 0; background: rgba(13,10,26,0.95); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }}
+    .pin-card {{ background: var(--card-bg); border: 1px solid var(--pink); border-radius: 20px; padding: 24px; width: 100%; max-width: 320px; text-align: center; }}
+    .pin-input {{ width: 100%; height: 50px; font-size: 24px; text-align: center; letter-spacing: 8px; background: #211a3e; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; color: #fff; margin: 16px 0; outline: none; }}
+    .pin-btn {{ width: 100%; height: 46px; background: var(--pink); color: #fff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌸 Gacha MV Remote</h1>
+    <span class="badge" id="connBadge">● CONNECTED</span>
+  </header>
+
+  <!-- Now Playing -->
+  <div class="card">
+    <div class="card-title">🎵 Now Playing on Player</div>
+    <div class="now-playing-title" id="nowPlayingTitle">Loading...</div>
+    <div class="ctrl-row">
+      <button class="btn-ctrl btn-primary" id="btnPlayPause">⏸️ Pause</button>
+      <button class="btn-ctrl btn-accent" id="btnSkipNext">⏭️ Skip</button>
+    </div>
+    <div class="vol-wrap">
+      <span style="font-size:13px; font-weight:700;">🔊 Volume:</span>
+      <input type="range" id="sliderVol" class="vol-slider" min="0" max="200" value="100">
+      <span id="volVal" style="font-size:12px; color:var(--cyan); min-width:40px;">100%</span>
+    </div>
+  </div>
+
+  <!-- Add Video to Queue -->
+  <div class="card">
+    <div class="card-title">➕ Add Video from Phone</div>
+    <input type="text" id="inputUrl" class="input-box" placeholder="Paste YouTube link or Video ID...">
+    <div class="btn-grid">
+      <button class="btn-act btn-now" id="btnPlayNow">▶️ Play Now</button>
+      <button class="btn-act btn-next" id="btnPlayNext">⏭️ Play Next</button>
+      <button class="btn-act btn-queue" id="btnAddQueue">➕ Add Queue</button>
+    </div>
+  </div>
+
+  <!-- Active Queue -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div class="card-title" style="margin-bottom:0;">📋 Active Queue (<span id="queueCount">0</span>)</div>
+      <button id="btnClearQueue" style="background:none; border:none; color:var(--pink); font-size:12px; font-weight:700; cursor:pointer;">Clear All</button>
+    </div>
+    <div id="queueList"></div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+{pin_modal}
+
+  <script>
+    let currentPin = localStorage.getItem('gcmv_remote_pin') || '';
+    let isPlaying = false;
+
+    function showToast(msg) {{
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }}
+
+    async function api(path, opts = {{}}) {{
+      opts.headers = opts.headers || {{}};
+      if (currentPin) opts.headers['X-GCMV-PIN'] = currentPin;
+      try {{
+        const r = await fetch(path, opts);
+        if (r.status === 401) {{
+          const po = document.getElementById('pinOverlay');
+          if (po) po.style.display = 'flex';
+        }}
+        return await r.json();
+      }} catch (e) {{ return null; }}
+    }}
+
+    async function refreshStatus() {{
+      const data = await api('/api/status');
+      if (!data) return;
+      if (data.currentVideo) {{
+        document.getElementById('nowPlayingTitle').textContent = data.currentVideo.title || 'Playing video';
+        isPlaying = data.currentVideo.isPlaying;
+        document.getElementById('btnPlayPause').textContent = isPlaying ? '⏸️ Pause' : '▶️ Play';
+      }}
+      const q = data.queue || [];
+      document.getElementById('queueCount').textContent = q.length;
+      const qList = document.getElementById('queueList');
+      if (q.length === 0) {{
+        qList.innerHTML = '<div class="queue-empty">Queue is empty. Add a video above!</div>';
+      }} else {{
+        qList.innerHTML = q.map((item, idx) => `
+          <div class="queue-item">
+            <span class="queue-num">${{idx + 1}}</span>
+            <span class="queue-title">${{item.title || item.videoId}}</span>
+            <button class="queue-del" onclick="deleteQueueItem('${{item.id}}')">🗑️</button>
+          </div>
+        `).join('');
+      }}
+    }}
+
+    async function addVideo(action) {{
+      const input = document.getElementById('inputUrl');
+      const val = input.value.trim();
+      if (!val) return showToast('⚠️ Enter a YouTube URL or Video ID');
+      const res = await api('/api/queue', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ url: val, action: action, pin: currentPin }})
+      }});
+      if (res && res.success) {{
+        input.value = '';
+        const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued to play next!' : '➕ Added to queue!';
+        showToast(actLabel);
+        refreshStatus();
+      }} else {{
+        showToast('❌ ' + (res?.error || 'Failed to add video'));
+      }}
+    }}
+
+    window.deleteQueueItem = async function(id) {{
+      await api('/api/queue?id=' + encodeURIComponent(id), {{ method: 'DELETE' }});
+      refreshStatus();
+    }};
+
+    document.getElementById('btnPlayNow').addEventListener('click', () => addVideo('play_now'));
+    document.getElementById('btnPlayNext').addEventListener('click', () => addVideo('play_next'));
+    document.getElementById('btnAddQueue').addEventListener('click', () => addVideo('add_queue'));
+
+    document.getElementById('btnPlayPause').addEventListener('click', async () => {{
+      await api('/api/control', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: isPlaying ? 'pause' : 'play' }})
+      }});
+      isPlaying = !isPlaying;
+      document.getElementById('btnPlayPause').textContent = isPlaying ? '⏸️ Pause' : '▶️ Play';
+    }});
+
+    document.getElementById('btnSkipNext').addEventListener('click', async () => {{
+      await api('/api/control', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'next' }})
+      }});
+      showToast('⏭️ Skipped!');
+      setTimeout(refreshStatus, 600);
+    }});
+
+    document.getElementById('btnClearQueue').addEventListener('click', async () => {{
+      if (!confirm('Clear all queued songs?')) return;
+      await api('/api/queue', {{ method: 'DELETE' }});
+      refreshStatus();
+    }});
+
+    const slider = document.getElementById('sliderVol');
+    slider.addEventListener('input', (e) => {{
+      document.getElementById('volVal').textContent = e.target.value + '%';
+    }});
+    slider.addEventListener('change', async (e) => {{
+      await api('/api/control', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'volume', value: parseInt(e.target.value, 10) }})
+      }});
+    }});
+
+    const btnPin = document.getElementById('btnSubmitPin');
+    if (btnPin) {{
+      btnPin.addEventListener('click', async () => {{
+        const pinVal = document.getElementById('pinInput').value.trim();
+        const res = await api('/api/auth', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ pin: pinVal }})
+        }});
+        if (res && res.success) {{
+          currentPin = pinVal;
+          localStorage.setItem('gcmv_remote_pin', pinVal);
+          document.getElementById('pinOverlay').style.display = 'none';
+          refreshStatus();
+        }} else {{
+          alert('❌ Incorrect PIN');
+        }}
+      }});
+    }}
+
+    refreshStatus();
+    setInterval(refreshStatus, 2500);
+  </script>
+</body>
+</html>"""
+
 class NasHandler(http.server.BaseHTTPRequestHandler):
     def _send_cors_headers(self):
         origin = self.headers.get("Origin", "")
         if is_allowed_origin(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-            self.send_header("Access-Control-Allow-Private-Network", "true")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-GCMV-PIN")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
 
     def do_OPTIONS(self):
-        self.send_response(204 if is_allowed_origin(self.headers.get("Origin", "")) else 403)
+        self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
 
-    def _require_auth(self):
+    def _require_nas_auth(self):
+        if not AUTH_TOKEN:
+            return False
         header = self.headers.get("Authorization", "")
         supplied = header[7:] if header.startswith("Bearer ") else ""
         if hmac.compare_digest(supplied, AUTH_TOKEN):
@@ -109,6 +430,17 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("WWW-Authenticate", "Bearer")
         self.end_headers()
         self.wfile.write(json.dumps({"error": "Unauthorized"}).encode("utf-8"))
+        return False
+
+    def _is_remote_authorized(self, body_json=None):
+        if not server_config.get("pinRequired") or not server_config.get("remotePin"):
+            return True
+        header_pin = self.headers.get("X-GCMV-PIN", "").strip()
+        expected_pin = server_config.get("remotePin", "").strip()
+        if header_pin and header_pin == expected_pin:
+            return True
+        if body_json and isinstance(body_json, dict) and str(body_json.get("pin", "")).strip() == expected_pin:
+            return True
         return False
 
     def _read_json_body(self):
@@ -122,7 +454,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             return None
         try:
             body = self.rfile.read(content_length).decode("utf-8")
-            return json.loads(body)
+            return json.loads(body) if body else {}
         except Exception:
             self.send_response(400)
             self._send_cors_headers()
@@ -132,22 +464,44 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             return None
 
     def do_GET(self):
-        if not self._require_auth():
-            return
+        global queue, pending_controls
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
-        # 1. Health / Status check
-        if path in ("/", "/health", "/api/status"):
-            db = read_db()
-            total_segments = sum(len(v) for v in db.values() if isinstance(v, list))
+        # 1. Web Remote HTML
+        if path in ("/", "/remote"):
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "text/html; charset=UTF-8")
+            self.end_headers()
+            html = get_web_remote_html(server_config.get("pinRequired") and bool(server_config.get("remotePin")))
+            self.wfile.write(html.encode("utf-8"))
+            return
+
+        # 2. Health & Status Check
+        if path in ("/api/status", "/health"):
+            is_nas = bool(self.headers.get("Authorization"))
+            video_count = 0
+            total_segments = 0
+            if is_nas:
+                db = read_db()
+                video_count = len(db)
+                total_segments = sum(len(v) for v in db.values() if isinstance(v, list))
+
+            with queue_lock:
+                q_copy = list(queue)
+
             resp = {
                 "status": "online",
-                "service": "Gacha MV Player Python NAS Server",
-                "version": "1.0.3.2",
-                "videoCount": len(db),
-                "totalSegments": total_segments
+                "service": "Gacha MV Player Python Remote & NAS Server",
+                "version": "1.0.3.3",
+                "pinRequired": server_config.get("pinRequired") and bool(server_config.get("remotePin")),
+                "currentVideo": current_playback,
+                "queue": q_copy,
+                "videoCount": video_count,
+                "totalSegments": total_segments,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
             self.send_response(200)
             self._send_cors_headers()
@@ -156,8 +510,48 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(resp).encode("utf-8"))
             return
 
-        # 2. Get segments for a video
+        # 3. Remote Queue GET
+        if path == "/api/queue":
+            pop_item = query.get("pop", ["false"])[0] == "true"
+            with queue_lock:
+                popped = queue.pop(0) if (pop_item and len(queue) > 0) else None
+                q_copy = list(queue)
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "item": popped, "queue": q_copy}).encode("utf-8"))
+            return
+
+        # 4. Control Polling for Desktop Extension
+        if path == "/api/control/poll":
+            with queue_lock:
+                actions = list(pending_controls)
+                pending_controls.clear()
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "actions": actions}).encode("utf-8"))
+            return
+
+        # 5. Remote Config GET
+        if path == "/api/config":
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            resp = {
+                "pinRequired": server_config.get("pinRequired", False),
+                "remotePin": "••••" if server_config.get("remotePin") else ""
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            return
+
+        # --- NAS DATABASE SYNC GET ENDPOINTS ---
         if path in ("/api/skipSegments", "/skipSegments"):
+            if not self._require_nas_auth():
+                return
             v_list = query.get("videoID") or query.get("videoId") or query.get("v")
             if not v_list:
                 self.send_response(400)
@@ -166,7 +560,6 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Missing videoID parameter"}).encode("utf-8"))
                 return
-
             video_id = v_list[0]
             if not is_valid_video_id(video_id):
                 self.send_response(400)
@@ -177,7 +570,6 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
                 return
             db = read_db()
             video_segs = db.get(video_id, [])
-
             sb_formatted = [
                 {
                     "UUID": s.get("id", f"nas_{video_id}_{idx}"),
@@ -189,7 +581,6 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
                 }
                 for idx, s in enumerate(video_segs)
             ]
-
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
@@ -197,8 +588,9 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(sb_formatted).encode("utf-8"))
             return
 
-        # 3. Full Database Export
         if path == "/api/database":
+            if not self._require_nas_auth():
+                return
             db = read_db()
             self.send_response(200)
             self._send_cors_headers()
@@ -211,70 +603,174 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"error": "Not Found"}).encode("utf-8"))
+        self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
     def do_POST(self):
-        if not self._require_auth():
-            return
+        global queue, pending_controls, current_playback
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
-
-        payload = self._read_json_body()
-        if payload is None:
+        body = self._read_json_body()
+        if body is None:
             return
-        if not isinstance(payload, dict):
-            self.send_response(400)
+
+        # 1. Auth check
+        if path == "/api/auth":
+            pin = str(body.get("pin", "")).strip()
+            expected = server_config.get("remotePin", "").strip()
+            if not server_config.get("pinRequired") or pin == expected:
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
+            else:
+                self.send_response(401)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": "Invalid PIN"}).encode("utf-8"))
+            return
+
+        # 2. Add to Queue
+        if path == "/api/queue":
+            if not self._is_remote_authorized(body):
+                self.send_response(401)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "PIN required"}).encode("utf-8"))
+                return
+
+            raw_url = body.get("url") or body.get("videoId")
+            action = body.get("action", "add_queue")
+            video_id = extract_youtube_video_id(raw_url)
+            if not video_id:
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Could not extract valid YouTube video ID"}).encode("utf-8"))
+                return
+
+            item = {
+                "id": f"q_{int(time.time() * 1000)}_{random.randint(100, 999)}",
+                "videoId": video_id,
+                "title": f"YouTube Video ({video_id})",
+                "addedAt": int(time.time() * 1000)
+            }
+            fetch_video_title_async(item)
+
+            with queue_lock:
+                if action == "play_now":
+                    pending_controls.append({"action": "play_now", "videoId": video_id, "title": item["title"]})
+                elif action == "play_next":
+                    queue.insert(0, item)
+                else:
+                    queue.append(item)
+                q_copy = list(queue)
+
+            self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"error": "JSON body must be an object"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": True, "item": item, "action": action, "queue": q_copy}).encode("utf-8"))
             return
 
-        # Add Segment
-        if path in ("/api/skipSegments", "/api/add"):
-            video_id = payload.get("videoId") or payload.get("videoID")
-            start = payload.get("start")
-            end = payload.get("end")
-            category = str(payload.get("category", "custom"))[:64]
-            label = str(payload.get("label", ""))[:256]
+        # 3. Playback Control
+        if path == "/api/control":
+            if not self._is_remote_authorized(body):
+                self.send_response(401)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "PIN required"}).encode("utf-8"))
+                return
 
+            action = body.get("action")
+            val = body.get("value")
+            with queue_lock:
+                if action == "next":
+                    next_item = queue.pop(0) if len(queue) > 0 else None
+                    if next_item:
+                        pending_controls.append({"action": "play_now", "videoId": next_item["videoId"], "title": next_item["title"]})
+                    else:
+                        pending_controls.append({"action": "next"})
+                else:
+                    pending_controls.append({"action": action, "value": val})
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "action": action}).encode("utf-8"))
+            return
+
+        # 4. Playback State Update (from player)
+        if path == "/api/playback":
+            if "videoId" in body:
+                current_playback["videoId"] = body["videoId"]
+            if "title" in body:
+                current_playback["title"] = body["title"]
+            if "isPlaying" in body and isinstance(body["isPlaying"], bool):
+                current_playback["isPlaying"] = body["isPlaying"]
+            if "volume" in body and isinstance(body["volume"], (int, float)):
+                current_playback["volume"] = int(body["volume"])
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "currentVideo": current_playback}).encode("utf-8"))
+            return
+
+        # 5. Remote Config Update
+        if path == "/api/config":
+            if "pinRequired" in body and isinstance(body["pinRequired"], bool):
+                server_config["pinRequired"] = body["pinRequired"]
+            if "remotePin" in body and isinstance(body["remotePin"], str):
+                server_config["remotePin"] = body["remotePin"].strip()
+            save_config(server_config)
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "pinRequired": server_config.get("pinRequired", False)}).encode("utf-8"))
+            return
+
+        # --- NAS DATABASE SYNC POST ENDPOINTS ---
+        if path in ("/api/skipSegments", "/api/add"):
+            if not self._require_nas_auth():
+                return
+            video_id = body.get("videoId") or body.get("videoID")
             try:
-                start = float(start)
-                end = float(end)
+                start = float(body.get("start"))
+                end = float(body.get("end"))
             except (TypeError, ValueError):
-                start = math.nan
-                end = math.nan
+                start, end = -1, -1
+
+            category = str(body.get("category", "custom"))[:64]
+            label = str(body.get("label", ""))[:256]
 
             if not is_valid_video_id(video_id) or not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
                 self.send_response(400)
                 self._send_cors_headers()
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "Missing videoId, start, or end"}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": "Invalid videoId, start, or end timestamp"}).encode("utf-8"))
                 return
 
             db = read_db()
             if video_id not in db:
                 db[video_id] = []
 
-            seg_id = str(payload.get("id") or f"nas_{int(time.time()*1000)}_{random.randint(100,999)}")[:200]
-            segment = {
-                "id": seg_id,
-                "start": round(start, 1),
-                "end": round(end, 1),
-                "category": category,
-                "label": label
-            }
+            seg_id = str(body.get("id", f"nas_{int(time.time()*1000)}_{random.randint(100, 999)}"))[:200]
+            segment = {"id": seg_id, "start": round(start, 1), "end": round(end, 1), "category": category, "label": label}
 
-            existing_index = next(
-                (i for i, item in enumerate(db[video_id]) if (item.get("id") or item.get("UUID")) == seg_id),
-                None
-            )
-            if existing_index is None:
-                db[video_id].append(segment)
+            existing_idx = next((i for i, s in enumerate(db[video_id]) if s.get("id") == seg_id or s.get("UUID") == seg_id), -1)
+            if existing_idx >= 0:
+                db[video_id][existing_idx] = segment
             else:
-                db[video_id][existing_index] = segment
+                db[video_id].append(segment)
 
             if not write_db(db):
                 self.send_response(500)
@@ -288,116 +784,115 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({
-                "success": True,
-                "id": seg_id,
-                "segment": segment,
-                "message": "Updated on NAS" if existing_index is not None else "Saved to NAS"
-            }).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": True, "id": seg_id, "segment": segment}).encode("utf-8"))
             return
 
-        # Import full database
         if path == "/api/database":
-            if not is_valid_database(payload):
+            if not self._require_nas_auth():
+                return
+            if not is_valid_database(body) or not write_db(body):
                 self.send_response(400)
                 self._send_cors_headers()
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Invalid database payload"}).encode("utf-8"))
                 return
-            is_merge = query.get("merge", ["false"])[0].lower() == "true"
-            final_db = payload
-            if is_merge:
-                current = read_db()
-                final_db = {**current}
-                for v_id, segs in payload.items():
-                    if v_id not in final_db:
-                        final_db[v_id] = []
-                    if isinstance(segs, list):
-                        final_db[v_id].extend(segs)
 
-            if not is_valid_database(final_db) or not write_db(final_db):
-                self.send_response(500)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Could not save database"}).encode("utf-8"))
-                return
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "videoCount": len(final_db)}).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": True, "videoCount": len(body)}).encode("utf-8"))
             return
 
         self.send_response(404)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"error": "Not Found"}).encode("utf-8"))
+        self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
     def do_DELETE(self):
-        if not self._require_auth():
-            return
+        global queue
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
-        if path == "/api/skipSegments":
-            v_list = query.get("videoID") or query.get("videoId")
-            id_list = query.get("id") or query.get("UUID")
-
-            if not v_list or not id_list:
-                self.send_response(400)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Missing videoId or id"}).encode("utf-8"))
-                return
-
-            video_id = v_list[0]
-            seg_id = id_list[0]
-            if not is_valid_video_id(video_id) or len(seg_id) > 200:
-                self.send_response(400)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid videoId or id"}).encode("utf-8"))
-                return
-
-            db = read_db()
-            if video_id in db:
-                db[video_id] = [s for s in db[video_id] if s.get("id") != seg_id and s.get("UUID") != seg_id]
-                if len(db[video_id]) == 0:
-                    del db[video_id]
-                if not write_db(db):
-                    self.send_response(500)
-                    self._send_cors_headers()
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Could not save database"}).encode("utf-8"))
-                    return
+        if path == "/api/queue":
+            q_id = query.get("id", [None])[0]
+            with queue_lock:
+                if q_id:
+                    queue = [item for item in queue if item.get("id") != q_id]
+                else:
+                    queue.clear()
+                q_copy = list(queue)
 
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "message": "Deleted from NAS"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"success": True, "queue": q_copy}).encode("utf-8"))
+            return
+
+        if path == "/api/skipSegments":
+            if not self._require_nas_auth():
+                return
+            v_list = query.get("videoID") or query.get("videoId")
+            s_list = query.get("id") or query.get("UUID")
+            if not v_list or not s_list:
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Missing videoId or segment id"}).encode("utf-8"))
+                return
+
+            video_id, segment_id = v_list[0], s_list[0]
+            db = read_db()
+            if video_id in db:
+                db[video_id] = [s for s in db[video_id] if s.get("id") != segment_id and s.get("UUID") != segment_id]
+                if not db[video_id]:
+                    del db[video_id]
+                write_db(db)
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
             return
 
         self.send_response(404)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"error": "Not Found"}).encode("utf-8"))
+        self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode("utf-8"))
 
-if __name__ == "__main__":
-    server_address = (BIND_HOST, PORT)
-    httpd = http.server.HTTPServer(server_address, NasHandler)
-    print(f"🌸 Gacha MV NAS Python Server running on http://{BIND_HOST}:{PORT}")
-    print(f"📁 Database file: {DB_FILE}")
+def main():
+    start_port = PORT
+    httpd = None
+    bound_port = start_port
+
+    for p in range(start_port, start_port + 20):
+        try:
+            httpd = http.server.ThreadingHTTPServer((BIND_HOST, p), NasHandler)
+            bound_port = p
+            break
+        except OSError:
+            print(f"[Remote Server] Port {p} busy, trying {p + 1}...")
+
+    if not httpd:
+        print(f"[Remote Server] Failed to bind to any port in range {start_port}-{start_port + 20}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"🌸 Gacha MV NAS & Remote Server running on http://{BIND_HOST}:{bound_port}")
+    print(f"📱 Phone Web Remote available at: http://{get_local_ip()}:{bound_port}/remote")
+    print(f"📁 Storing database at: {DB_FILE}")
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down server...")
+        print("\nStopping server...")
         httpd.server_close()
+
+if __name__ == "__main__":
+    main()

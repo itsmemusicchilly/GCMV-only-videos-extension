@@ -1,6 +1,6 @@
 {
   "name": "gacha-mv-player-youtube",
-  "version": "1.0.3.1",
+  "version": "1.0.3.3",
   "description": "Gacha MV Player - YouTube Extension & Standalone Android APK",
   "scripts": {
     "build:apk": "./build-apk.sh",

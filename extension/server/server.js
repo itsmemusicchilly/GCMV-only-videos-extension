@@ -1,16 +1,18 @@
 /**
- * Gacha MV Player - Lightweight NAS Database Server
- * Zero dependencies! Runs on Node.js 14+ on Synology, TrueNAS, unRAID, QNAP, or Docker.
+ * Gacha MV Player - Lightweight NAS Database & Local Wi-Fi Remote Server
+ * Zero dependencies! Runs on Node.js 14+ on Synology, TrueNAS, unRAID, QNAP, Windows, Mac, Linux, or Docker.
  */
 
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const url = require("url");
 const crypto = require("crypto");
+const os = require("os");
 
-const PORT = process.env.PORT || 3000;
-const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
+const PORT = parseInt(process.env.PORT || "3000", 10);
+const BIND_HOST = process.env.BIND_HOST || "0.0.0.0";
 const AUTH_TOKEN = (process.env.NAS_AUTH_TOKEN || "").trim();
 const ALLOWED_ORIGINS = new Set(
   (process.env.ALLOWED_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean)
@@ -18,19 +20,87 @@ const ALLOWED_ORIGINS = new Set(
 const MAX_BODY_BYTES = 1024 * 1024;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_FILE = path.join(DATA_DIR, "database.json");
+const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 
-if (!AUTH_TOKEN) {
-  console.error("[NAS Server] NAS_AUTH_TOKEN is required. Refusing to start without authentication.");
-  process.exit(1);
-}
-
-// Ensure data directory and database file exist
+// Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 if (!fs.existsSync(DB_FILE)) {
   fs.writeFileSync(DB_FILE, JSON.stringify({}, null, 2), "utf8");
+}
+
+// Remote Server Config & State
+let serverConfig = {
+  pinRequired: Boolean(process.env.REMOTE_PIN),
+  remotePin: process.env.REMOTE_PIN || ""
+};
+
+if (fs.existsSync(CONFIG_FILE)) {
+  try {
+    const loaded = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    if (loaded && typeof loaded === "object") {
+      serverConfig = { ...serverConfig, ...loaded };
+    }
+  } catch (e) {}
+}
+
+function saveConfig(cfg) {
+  try {
+    serverConfig = { ...serverConfig, ...cfg };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(serverConfig, null, 2), "utf8");
+  } catch (e) {
+    console.error("[Server] Error saving config:", e);
+  }
+}
+
+// In-Memory Queue & Playback State
+let queue = [];
+let pendingControls = [];
+let currentPlayback = {
+  videoId: "",
+  title: "No video playing",
+  isPlaying: false,
+  volume: 100
+};
+
+function getLocalIp() {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name]) {
+        if (net.family === "IPv4" && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+  } catch (e) {}
+  return "127.0.0.1";
+}
+
+function extractYouTubeVideoId(input) {
+  if (!input || typeof input !== "string") return null;
+  const str = input.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(str)) return str;
+  const match = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})/);
+  if (match && match[1]) return match[1];
+  return null;
+}
+
+function fetchVideoTitleAsync(item) {
+  const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${item.videoId}&format=json`;
+  https.get(oembedUrl, (res) => {
+    if (res.statusCode !== 200) return;
+    let data = "";
+    res.on("data", (chunk) => { data += chunk; });
+    res.on("end", () => {
+      try {
+        const json = JSON.parse(data);
+        if (json.title) item.title = json.title;
+      } catch (e) {}
+    });
+  }).on("error", () => {});
 }
 
 function readDb() {
@@ -86,21 +156,32 @@ function isAllowedOrigin(origin) {
 
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
-  if (!isAllowedOrigin(origin)) return false;
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
+  if (isAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-GCMV-PIN");
   res.setHeader("Access-Control-Allow-Private-Network", "true");
-  return true;
 }
 
-function isAuthorized(req) {
+function isNasAuthorized(req) {
+  if (!AUTH_TOKEN) return false;
   const header = req.headers.authorization || "";
   const supplied = header.startsWith("Bearer ") ? header.slice(7) : "";
   const expectedBuffer = Buffer.from(AUTH_TOKEN);
   const suppliedBuffer = Buffer.from(supplied);
   return suppliedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
+}
+
+function isRemoteAuthorized(req, bodyJson) {
+  if (!serverConfig.pinRequired || !serverConfig.remotePin) return true;
+  const headerPin = req.headers["x-gcmv-pin"];
+  if (headerPin && headerPin.trim() === serverConfig.remotePin.trim()) return true;
+  if (bodyJson && bodyJson.pin && String(bodyJson.pin).trim() === serverConfig.remotePin.trim()) return true;
+  return false;
 }
 
 function readBody(req, res, callback) {
@@ -123,6 +204,255 @@ function readBody(req, res, callback) {
   });
 }
 
+function getWebRemoteHtml(pinRequired) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🌸 Gacha MV Remote</title>
+  <style>
+    :root {
+      --bg: #0d0a1a;
+      --card-bg: #16122a;
+      --card-border: rgba(255, 46, 147, 0.25);
+      --pink: #ff2e93;
+      --cyan: #00e5ff;
+      --green: #00ffaa;
+      --text: #ffffff;
+      --subtext: #a09bb8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 14px; min-height: 100vh; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--card-border); }
+    h1 { font-size: 19px; color: var(--text); font-weight: 800; display: flex; align-items: center; gap: 6px; }
+    .badge { font-size: 11px; background: rgba(0,255,170,0.15); color: var(--green); border: 1px solid var(--green); border-radius: 12px; padding: 3px 8px; font-weight: 700; }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 16px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    .card-title { font-size: 13px; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+    .now-playing-title { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; margin-bottom: 12px; word-break: break-word; }
+    .ctrl-row { display: flex; gap: 10px; margin-top: 10px; }
+    .btn-ctrl { flex: 1; height: 46px; border: none; border-radius: 12px; background: rgba(255,255,255,0.08); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-ctrl:active { transform: scale(0.96); background: rgba(255,255,255,0.18); }
+    .btn-primary { background: linear-gradient(135deg, var(--pink), #8f00ff); color: #fff; }
+    .btn-accent { background: rgba(0, 229, 255, 0.2); border: 1px solid var(--cyan); color: var(--cyan); }
+    .input-box { width: 100%; height: 46px; background: #211a3e; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 0 14px; color: #fff; font-size: 14px; margin-bottom: 10px; outline: none; }
+    .input-box:focus { border-color: var(--pink); box-shadow: 0 0 10px rgba(255,46,147,0.3); }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .btn-act { height: 42px; border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s; }
+    .btn-act:active { transform: scale(0.96); }
+    .btn-now { background: var(--pink); color: #fff; }
+    .btn-next { background: #6b21a8; color: #fff; border: 1px solid #a855f7; }
+    .btn-queue { background: rgba(0,229,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }
+    .queue-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .queue-num { font-size: 12px; font-weight: 800; color: var(--cyan); margin-right: 10px; min-width: 18px; }
+    .queue-title { font-size: 13px; font-weight: 600; color: #eee; flex: 1; word-break: break-word; }
+    .queue-del { background: none; border: none; color: #ff4444; font-size: 16px; padding: 6px; cursor: pointer; }
+    .queue-empty { color: var(--subtext); font-size: 13px; font-style: italic; text-align: center; padding: 18px 0; }
+    .vol-wrap { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+    .vol-slider { flex: 1; accent-color: var(--pink); }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2e1b4e; border: 1px solid var(--pink); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; box-shadow: 0 4px 15px rgba(0,0,0,0.5); opacity: 0; pointer-events: none; transition: opacity 0.25s ease; z-index: 100; }
+    .toast.show { opacity: 1; }
+    /* PIN Modal */
+    .pin-overlay { position: fixed; inset: 0; background: rgba(13,10,26,0.95); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+    .pin-card { background: var(--card-bg); border: 1px solid var(--pink); border-radius: 20px; padding: 24px; width: 100%; max-width: 320px; text-align: center; }
+    .pin-input { width: 100%; height: 50px; font-size: 24px; text-align: center; letter-spacing: 8px; background: #211a3e; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; color: #fff; margin: 16px 0; outline: none; }
+    .pin-btn { width: 100%; height: 46px; background: var(--pink); color: #fff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌸 Gacha MV Remote</h1>
+    <span class="badge" id="connBadge">● CONNECTED</span>
+  </header>
+
+  <!-- Now Playing -->
+  <div class="card">
+    <div class="card-title">🎵 Now Playing on Player</div>
+    <div class="now-playing-title" id="nowPlayingTitle">Loading...</div>
+    <div class="ctrl-row">
+      <button class="btn-ctrl btn-primary" id="btnPlayPause">⏸️ Pause</button>
+      <button class="btn-ctrl btn-accent" id="btnSkipNext">⏭️ Skip</button>
+    </div>
+    <div class="vol-wrap">
+      <span style="font-size:13px; font-weight:700;">🔊 Volume:</span>
+      <input type="range" id="sliderVol" class="vol-slider" min="0" max="200" value="100">
+      <span id="volVal" style="font-size:12px; color:var(--cyan); min-width:40px;">100%</span>
+    </div>
+  </div>
+
+  <!-- Add Video to Queue -->
+  <div class="card">
+    <div class="card-title">➕ Add Video from Phone</div>
+    <input type="text" id="inputUrl" class="input-box" placeholder="Paste YouTube link or Video ID...">
+    <div class="btn-grid">
+      <button class="btn-act btn-now" id="btnPlayNow">▶️ Play Now</button>
+      <button class="btn-act btn-next" id="btnPlayNext">⏭️ Play Next</button>
+      <button class="btn-act btn-queue" id="btnAddQueue">➕ Add Queue</button>
+    </div>
+  </div>
+
+  <!-- Active Queue -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div class="card-title" style="margin-bottom:0;">📋 Active Queue (<span id="queueCount">0</span>)</div>
+      <button id="btnClearQueue" style="background:none; border:none; color:var(--pink); font-size:12px; font-weight:700; cursor:pointer;">Clear All</button>
+    </div>
+    <div id="queueList"></div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  ${pinRequired ? `
+  <div id="pinOverlay" class="pin-overlay">
+    <div class="pin-card">
+      <h2 style="font-size:18px; margin-bottom:6px;">🔒 Remote PIN Required</h2>
+      <p style="font-size:12px; color:var(--subtext);">Enter the 4-digit PIN configured in Player Settings</p>
+      <input type="password" id="pinInput" class="pin-input" maxlength="8" placeholder="••••" autofocus>
+      <button id="btnSubmitPin" class="pin-btn">Unlock Remote</button>
+    </div>
+  </div>` : ""}
+
+  <script>
+    let currentPin = localStorage.getItem('gcmv_remote_pin') || '';
+    let isPlaying = false;
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }
+
+    async function api(path, opts = {}) {
+      opts.headers = opts.headers || {};
+      if (currentPin) opts.headers['X-GCMV-PIN'] = currentPin;
+      try {
+        const r = await fetch(path, opts);
+        if (r.status === 401) {
+          const po = document.getElementById('pinOverlay');
+          if (po) po.style.display = 'flex';
+        }
+        return await r.json();
+      } catch (e) { return null; }
+    }
+
+    async function refreshStatus() {
+      const data = await api('/api/status');
+      if (!data) return;
+      if (data.currentVideo) {
+        document.getElementById('nowPlayingTitle').textContent = data.currentVideo.title || 'Playing video';
+        isPlaying = data.currentVideo.isPlaying;
+        document.getElementById('btnPlayPause').textContent = isPlaying ? '⏸️ Pause' : '▶️ Play';
+      }
+      const queue = data.queue || [];
+      document.getElementById('queueCount').textContent = queue.length;
+      const qList = document.getElementById('queueList');
+      if (queue.length === 0) {
+        qList.innerHTML = '<div class="queue-empty">Queue is empty. Add a video above!</div>';
+      } else {
+        qList.innerHTML = queue.map((item, idx) => \`
+          <div class="queue-item">
+            <span class="queue-num">\${idx + 1}</span>
+            <span class="queue-title">\${item.title || item.videoId}</span>
+            <button class="queue-del" onclick="deleteQueueItem('\${item.id}')">🗑️</button>
+          </div>
+        \`).join('');
+      }
+    }
+
+    async function addVideo(action) {
+      const input = document.getElementById('inputUrl');
+      const val = input.value.trim();
+      if (!val) return showToast('⚠️ Enter a YouTube URL or Video ID');
+      const res = await api('/api/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: val, action: action, pin: currentPin })
+      });
+      if (res && res.success) {
+        input.value = '';
+        const actLabel = action === 'play_now' ? '▶️ Playing now!' : action === 'play_next' ? '⏭️ Queued to play next!' : '➕ Added to queue!';
+        showToast(actLabel);
+        refreshStatus();
+      } else {
+        showToast('❌ ' + (res?.error || 'Failed to add video'));
+      }
+    }
+
+    window.deleteQueueItem = async function(id) {
+      await api('/api/queue?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      refreshStatus();
+    };
+
+    document.getElementById('btnPlayNow').addEventListener('click', () => addVideo('play_now'));
+    document.getElementById('btnPlayNext').addEventListener('click', () => addVideo('play_next'));
+    document.getElementById('btnAddQueue').addEventListener('click', () => addVideo('add_queue'));
+
+    document.getElementById('btnPlayPause').addEventListener('click', async () => {
+      await api('/api/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: isPlaying ? 'pause' : 'play' })
+      });
+      isPlaying = !isPlaying;
+      document.getElementById('btnPlayPause').textContent = isPlaying ? '⏸️ Pause' : '▶️ Play';
+    });
+
+    document.getElementById('btnSkipNext').addEventListener('click', async () => {
+      await api('/api/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'next' })
+      });
+      showToast('⏭️ Skipped!');
+      setTimeout(refreshStatus, 600);
+    });
+
+    document.getElementById('btnClearQueue').addEventListener('click', async () => {
+      if (!confirm('Clear all queued songs?')) return;
+      await api('/api/queue', { method: 'DELETE' });
+      refreshStatus();
+    });
+
+    const slider = document.getElementById('sliderVol');
+    slider.addEventListener('input', (e) => {
+      document.getElementById('volVal').textContent = e.target.value + '%';
+    });
+    slider.addEventListener('change', async (e) => {
+      await api('/api/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'volume', value: parseInt(e.target.value, 10) })
+      });
+    });
+
+    const btnPin = document.getElementById('btnSubmitPin');
+    if (btnPin) {
+      btnPin.addEventListener('click', async () => {
+        const pinVal = document.getElementById('pinInput').value.trim();
+        const res = await api('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: pinVal })
+        });
+        if (res && res.success) {
+          currentPin = pinVal;
+          localStorage.setItem('gcmv_remote_pin', pinVal);
+          document.getElementById('pinOverlay').style.display = 'none';
+          refreshStatus();
+        } else {
+          alert('❌ Incorrect PIN');
+        }
+      });
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 2500);
+  </script>
+</body>
+</html>`;
+}
+
 const server = http.createServer((req, res) => {
   setCorsHeaders(req, res);
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -130,14 +460,8 @@ const server = http.createServer((req, res) => {
   res.setHeader("Expires", "0");
 
   if (req.method === "OPTIONS") {
-    res.writeHead(isAllowedOrigin(req.headers.origin) ? 204 : 403);
+    res.writeHead(204);
     res.end();
-    return;
-  }
-
-  if (!isAuthorized(req)) {
-    res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
-    res.end(JSON.stringify({ error: "Unauthorized" }));
     return;
   }
 
@@ -145,21 +469,35 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
   const query = parsedUrl.query;
 
-  // 1. Health & Status Check
-  if (pathname === "/" || pathname === "/health" || pathname === "/api/status") {
-    const db = readDb();
-    const videoCount = Object.keys(db).length;
+  // 1. Web Remote HTML UI
+  if (req.method === "GET" && (pathname === "/" || pathname === "/remote")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=UTF-8" });
+    res.end(getWebRemoteHtml(serverConfig.pinRequired && Boolean(serverConfig.remotePin)));
+    return;
+  }
+
+  // 2. Status check (Remote + NAS)
+  if (req.method === "GET" && (pathname === "/api/status" || pathname === "/health")) {
+    const isNas = Boolean(req.headers.authorization);
+    let videoCount = 0;
     let totalSegments = 0;
-    Object.values(db).forEach((arr) => {
-      if (Array.isArray(arr)) totalSegments += arr.length;
-    });
+    if (isNas) {
+      const db = readDb();
+      videoCount = Object.keys(db).length;
+      Object.values(db).forEach((arr) => {
+        if (Array.isArray(arr)) totalSegments += arr.length;
+      });
+    }
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
         status: "online",
-        service: "Gacha MV Player NAS Database Server",
-        version: "1.0.3.2",
+        service: "Gacha MV Player Remote & NAS Server",
+        version: "1.0.3.3",
+        pinRequired: serverConfig.pinRequired && Boolean(serverConfig.remotePin),
+        currentVideo: currentPlayback,
+        queue: queue,
         videoCount: videoCount,
         totalSegments: totalSegments,
         timestamp: new Date().toISOString()
@@ -168,8 +506,205 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. Fetch Segments for a specific Video (SponsorBlock-compatible endpoint)
-  // GET /api/skipSegments?videoID=...
+  // 3. Auth check for Remote PIN
+  if (req.method === "POST" && pathname === "/api/auth") {
+    readBody(req, res, (body) => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const pin = String(data.pin || "").trim();
+        if (!serverConfig.pinRequired || pin === serverConfig.remotePin) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true }));
+        } else {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: false, error: "Invalid PIN" }));
+        }
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
+    return;
+  }
+
+  // 4. Remote Queue API (GET, POST, DELETE)
+  if (pathname === "/api/queue") {
+    // GET /api/queue (or ?pop=true)
+    if (req.method === "GET") {
+      if (query.pop === "true") {
+        const popped = queue.length > 0 ? queue.shift() : null;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, item: popped, queue }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, queue }));
+      return;
+    }
+
+    // POST /api/queue
+    if (req.method === "POST") {
+      readBody(req, res, (body) => {
+        try {
+          const data = JSON.parse(body || "{}");
+          if (!isRemoteAuthorized(req, data)) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "PIN required" }));
+            return;
+          }
+
+          const rawUrl = data.url || data.videoId;
+          const action = data.action || "add_queue"; // play_now, play_next, add_queue
+          const videoId = extractYouTubeVideoId(rawUrl);
+
+          if (!videoId) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Could not extract valid YouTube video ID" }));
+            return;
+          }
+
+          const item = {
+            id: `q_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+            videoId: videoId,
+            title: `YouTube Video (${videoId})`,
+            addedAt: Date.now()
+          };
+          fetchVideoTitleAsync(item);
+
+          if (action === "play_now") {
+            pendingControls.push({ action: "play_now", videoId, title: item.title });
+          } else if (action === "play_next") {
+            queue.unshift(item);
+          } else {
+            queue.push(item);
+          }
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, item, action, queue }));
+        } catch (e) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        }
+      });
+      return;
+    }
+
+    // DELETE /api/queue
+    if (req.method === "DELETE") {
+      if (query.id) {
+        queue = queue.filter((item) => item.id !== query.id);
+      } else {
+        queue = [];
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, queue }));
+      return;
+    }
+  }
+
+  // 5. Playback Control API
+  if (pathname === "/api/control" && req.method === "POST") {
+    readBody(req, res, (body) => {
+      try {
+        const data = JSON.parse(body || "{}");
+        if (!isRemoteAuthorized(req, data)) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "PIN required" }));
+          return;
+        }
+
+        const action = data.action; // play, pause, next, volume
+        const val = data.value;
+
+        if (action === "next") {
+          const nextItem = queue.length > 0 ? queue.shift() : null;
+          if (nextItem) {
+            pendingControls.push({ action: "play_now", videoId: nextItem.videoId, title: nextItem.title });
+          } else {
+            pendingControls.push({ action: "next" });
+          }
+        } else {
+          pendingControls.push({ action, value: val });
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, action }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
+    return;
+  }
+
+  // 6. Polling endpoint for Desktop Extension
+  if (pathname === "/api/control/poll" && req.method === "GET") {
+    const actions = [...pendingControls];
+    pendingControls = [];
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true, actions }));
+    return;
+  }
+
+  // 7. Playback update from Desktop Extension or APK
+  if (pathname === "/api/playback" && req.method === "POST") {
+    readBody(req, res, (body) => {
+      try {
+        const data = JSON.parse(body || "{}");
+        if (data.videoId) currentPlayback.videoId = data.videoId;
+        if (data.title) currentPlayback.title = data.title;
+        if (typeof data.isPlaying === "boolean") currentPlayback.isPlaying = data.isPlaying;
+        if (typeof data.volume === "number") currentPlayback.volume = data.volume;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, currentVideo: currentPlayback }));
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
+    return;
+  }
+
+  // 8. Server Config Endpoint (Set PIN / PinRequired from extension settings)
+  if (pathname === "/api/config") {
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        pinRequired: serverConfig.pinRequired,
+        remotePin: serverConfig.remotePin ? "••••" : ""
+      }));
+      return;
+    }
+    if (req.method === "POST") {
+      readBody(req, res, (body) => {
+        try {
+          const data = JSON.parse(body || "{}");
+          if (typeof data.pinRequired === "boolean") serverConfig.pinRequired = data.pinRequired;
+          if (typeof data.remotePin === "string") serverConfig.remotePin = data.remotePin.trim();
+          saveConfig(serverConfig);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ success: true, pinRequired: serverConfig.pinRequired }));
+        } catch (e) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        }
+      });
+      return;
+    }
+  }
+
+  // --- NAS DATABASE SYNC ENDPOINTS (Protected by NAS_AUTH_TOKEN) ---
+
+  // Check auth for NAS endpoints
+  if (pathname === "/api/skipSegments" || pathname === "/skipSegments" || pathname === "/api/database" || pathname === "/api/add") {
+    if (!isNasAuthorized(req)) {
+      res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
+      res.end(JSON.stringify({ error: "Unauthorized" }));
+      return;
+    }
+  }
+
+  // 9. Fetch Segments for a specific Video (SponsorBlock-compatible endpoint)
   if (req.method === "GET" && (pathname === "/api/skipSegments" || pathname === "/skipSegments")) {
     const videoId = query.videoID || query.videoId || query.v;
     if (!isValidVideoId(videoId)) {
@@ -181,7 +716,6 @@ const server = http.createServer((req, res) => {
     const db = readDb();
     const videoSegments = db[videoId] || [];
 
-    // Map to SponsorBlock-compatible format
     const sbFormatted = videoSegments.map((s, idx) => ({
       UUID: s.id || `nas_${videoId}_${idx}`,
       segment: [s.start, s.end],
@@ -196,8 +730,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Add or Update a Segment
-  // POST /api/skipSegments
+  // 10. Add or Update a Segment
   if (req.method === "POST" && (pathname === "/api/skipSegments" || pathname === "/api/add")) {
     readBody(req, res, (body) => {
       try {
@@ -255,8 +788,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 4. Delete a Segment
-  // DELETE /api/skipSegments?videoID=...&id=...
+  // 11. Delete a Segment
   if (req.method === "DELETE" && pathname === "/api/skipSegments") {
     const videoId = query.videoID || query.videoId;
     const segmentId = query.id || query.UUID;
@@ -283,8 +815,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Entire Database Import & Export
-  // GET /api/database
+  // 12. Entire Database Import & Export
   if (req.method === "GET" && pathname === "/api/database") {
     const db = readDb();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -292,7 +823,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // POST /api/database (Full Import / Overwrite / Merge)
   if (req.method === "POST" && pathname === "/api/database") {
     readBody(req, res, (body) => {
       try {
@@ -335,7 +865,27 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: "Endpoint not found" }));
 });
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`🌸 Gacha MV NAS Database Server running on http://${BIND_HOST}:${PORT}`);
-  console.log(`📁 Storing database at: ${DB_FILE}`);
-});
+// Automatic Port Fallback (Tries up to 20 ports if busy)
+let currentPort = PORT;
+const INITIAL_PORT = PORT;
+
+function startServer(portToTry) {
+  server.removeAllListeners("error");
+  server.once("error", (err) => {
+    if (err.code === "EADDRINUSE" && currentPort - INITIAL_PORT < 20) {
+      console.warn(`[Remote Server] Port ${currentPort} busy, trying ${currentPort + 1}...`);
+      currentPort++;
+      startServer(currentPort);
+    } else {
+      console.error("[Remote Server] Failed to start server:", err);
+    }
+  });
+
+  server.listen(portToTry, BIND_HOST, () => {
+    console.log(`🌸 Gacha MV NAS & Remote Server running on http://${BIND_HOST}:${portToTry}`);
+    console.log(`📱 Phone Web Remote available at: http://${getLocalIp()}:${portToTry}/remote`);
+    console.log(`📁 Storing database at: ${DB_FILE}`);
+  });
+}
+
+startServer(currentPort);

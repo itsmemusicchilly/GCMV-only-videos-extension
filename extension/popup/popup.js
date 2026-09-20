@@ -76,6 +76,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnPopupNasExport = document.getElementById("btnPopupNasExport");
   const btnPopupNasImport = document.getElementById("btnPopupNasImport");
 
+  const toggleRemoteServer = document.getElementById("toggleRemoteServer");
+  const popupRemoteDetails = document.getElementById("popupRemoteDetails");
+  const popupRemoteUrlInput = document.getElementById("popupRemoteUrlInput");
+  const btnPopupCopyRemoteUrl = document.getElementById("btnPopupCopyRemoteUrl");
+
   const btnInstantRadio = document.getElementById("btnInstantRadio");
   const gachaSearchInput = document.getElementById("gachaSearchInput");
   const btnSearch = document.getElementById("btnSearch");
@@ -156,7 +161,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       volumeBoost: 100,
       autoUnmute: true,
       smoothPlayback: true,
-      preferredResolution: "auto"
+      preferredResolution: "auto",
+      remoteServerEnabled: true,
+      remoteServerUrl: ""
     });
 
     // Version 1.0.0 enabled NAS access without authentication. Disable that
@@ -192,6 +199,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (popupNasUrlInput) popupNasUrlInput.value = settings.nasServerUrl || "";
     if (popupNasTokenInput) popupNasTokenInput.value = settings.nasAuthToken || "";
     if (togglePopupNasAutoSync) togglePopupNasAutoSync.checked = settings.nasAutoSync;
+
+    if (toggleRemoteServer) {
+      toggleRemoteServer.checked = settings.remoteServerEnabled !== false;
+      if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", settings.remoteServerEnabled === false);
+    }
+    if (popupRemoteUrlInput) {
+      popupRemoteUrlInput.value = settings.remoteServerUrl || "http://127.0.0.1:3000/remote";
+    }
   } catch (err) {
     console.error("[Gacha MV] Failed to load settings:", err);
   }
@@ -375,6 +390,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (togglePopupNasAutoSync) {
     togglePopupNasAutoSync.addEventListener("change", async (e) => {
       await extStorage.set({ nasAutoSync: e.target.checked });
+    });
+  }
+
+  if (toggleRemoteServer) {
+    toggleRemoteServer.addEventListener("change", async (e) => {
+      const isRemote = e.target.checked;
+      if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", !isRemote);
+      await extStorage.set({ remoteServerEnabled: isRemote });
+    });
+  }
+
+  if (btnPopupCopyRemoteUrl) {
+    btnPopupCopyRemoteUrl.addEventListener("click", () => {
+      if (popupRemoteUrlInput && popupRemoteUrlInput.value) {
+        navigator.clipboard.writeText(popupRemoteUrlInput.value).then(() => {
+          const orig = btnPopupCopyRemoteUrl.textContent;
+          btnPopupCopyRemoteUrl.textContent = "Copied!";
+          setTimeout(() => { btnPopupCopyRemoteUrl.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
     });
   }
 

@@ -2,6 +2,7 @@ package com.itsmemusicchilly.gachamvplayer;
 
 import android.annotation.SuppressLint;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -50,7 +51,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -82,6 +85,7 @@ public class MainActivity extends AppCompatActivity {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private BottomSheetDialog settingsDialog = null;
+    private RemoteServerManager remoteServerManager = null;
 
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     @Override
@@ -102,12 +106,52 @@ public class MainActivity extends AppCompatActivity {
         loadExtensionAssets();
         setupTopBarAndFab();
         setupWebView();
+        setupRemoteServer();
         setupBackNavigation();
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
         } else {
             webView.loadUrl(YOUTUBE_URL);
+        }
+    }
+
+    private void setupRemoteServer() {
+        remoteServerManager = new RemoteServerManager(this);
+        remoteServerManager.setListener(new RemoteServerManager.RemoteActionListener() {
+            @Override
+            public void onPlayNow(String videoId, String title) {
+                if (webView != null) {
+                    webView.loadUrl("https://m.youtube.com/watch?v=" + videoId);
+                }
+            }
+
+            @Override
+            public void onControlAction(String action, Object value) {
+                if (webView == null || action == null) return;
+                switch (action) {
+                    case "play":
+                        webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.play(); })()", null);
+                        break;
+                    case "pause":
+                        webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
+                        break;
+                    case "next":
+                        webView.evaluateJavascript("(function(){ var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next'); if(btn) btn.click(); else if(window.__gachaSkipVideo) window.__gachaSkipVideo('remote_skip'); })()", null);
+                        break;
+                    case "volume":
+                        if (value instanceof Number) {
+                            int vol = Math.max(0, Math.min(200, ((Number) value).intValue()));
+                            webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.volume = " + (Math.min(100, vol) / 100.0) + "; })()", null);
+                        }
+                        break;
+                }
+            }
+        });
+
+        boolean remoteEnabled = getSharedPreferences("gacha_prefs", MODE_PRIVATE).getBoolean("remoteServerEnabled", true);
+        if (remoteEnabled) {
+            remoteServerManager.start(8080);
         }
     }
 
@@ -248,6 +292,14 @@ public class MainActivity extends AppCompatActivity {
         View btnNasExport = view.findViewById(R.id.btn_nas_export);
         View btnNasImport = view.findViewById(R.id.btn_nas_import);
 
+        com.google.android.material.switchmaterial.SwitchMaterial swRemote = view.findViewById(R.id.switch_remote_server);
+        LinearLayout layoutRemoteDetails = view.findViewById(R.id.layout_remote_details);
+        TextView tvRemoteUrl = view.findViewById(R.id.tv_remote_server_url);
+        View btnCopyRemoteUrl = view.findViewById(R.id.btn_copy_remote_url);
+        com.google.android.material.switchmaterial.SwitchMaterial swRemotePin = view.findViewById(R.id.switch_remote_pin);
+        LinearLayout layoutPinInput = view.findViewById(R.id.layout_pin_input);
+        EditText etRemotePin = view.findViewById(R.id.et_remote_pin);
+
         com.google.android.material.slider.Slider slVolume = view.findViewById(R.id.slider_volume);
         TextView tvVol = view.findViewById(R.id.tv_volume_val);
         TextView tvBadge = view.findViewById(R.id.tv_status_badge);
@@ -273,6 +325,9 @@ public class MainActivity extends AppCompatActivity {
         String nasUrl = sp.getString("nasServerUrl", "");
         String nasToken = sp.getString("nasAuthToken", "");
         boolean nasAutoSync = sp.getBoolean("nasAutoSync", false);
+        boolean remoteEnabled = sp.getBoolean("remoteServerEnabled", true);
+        boolean remotePinEnabled = sp.getBoolean("remotePinEnabled", false);
+        String remotePin = sp.getString("remotePin", "1234");
         float boost = sp.getFloat("volumeBoost", 100f);
 
         if (swMaster != null) swMaster.setChecked(enabled);
@@ -296,6 +351,33 @@ public class MainActivity extends AppCompatActivity {
         if (etNasUrl != null) etNasUrl.setText(nasUrl);
         if (etNasToken != null) etNasToken.setText(nasToken);
         if (swNasAutoSync != null) swNasAutoSync.setChecked(nasAutoSync);
+
+        if (swRemote != null) swRemote.setChecked(remoteEnabled);
+        if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(remoteEnabled ? View.VISIBLE : View.GONE);
+        if (tvRemoteUrl != null) {
+            if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                tvRemoteUrl.setText(remoteServerManager.getServerUrl());
+            } else {
+                tvRemoteUrl.setText("Server Stopped");
+            }
+        }
+        if (btnCopyRemoteUrl != null) {
+            btnCopyRemoteUrl.setOnClickListener(v -> {
+                if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                    String url = remoteServerManager.getServerUrl();
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Remote Control URL", url));
+                        Toast.makeText(this, "📋 Remote URL copied to clipboard!", Toast.LENGTH_SHORT).show();
+                    }
+                } else {
+                    Toast.makeText(this, "Remote server is stopped", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+        if (swRemotePin != null) swRemotePin.setChecked(remotePinEnabled);
+        if (layoutPinInput != null) layoutPinInput.setVisibility(remotePinEnabled ? View.VISIBLE : View.GONE);
+        if (etRemotePin != null) etRemotePin.setText(remotePin);
 
         if (tvBadge != null) {
             tvBadge.setText(enabled ? "ACTIVE" : "PAUSED");
@@ -377,6 +459,41 @@ public class MainActivity extends AppCompatActivity {
             if (layoutNasDetails != null) layoutNasDetails.setVisibility(isChecked ? View.VISIBLE : View.GONE);
         });
         autoSaveSetting(swNasAutoSync, "nasAutoSync", null);
+
+        autoSaveSetting(swRemote, "remoteServerEnabled", isChecked -> {
+            if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+            if (isChecked) {
+                if (remoteServerManager != null && !remoteServerManager.isRunning()) {
+                    remoteServerManager.start(8080);
+                    mainHandler.postDelayed(() -> {
+                        if (tvRemoteUrl != null && remoteServerManager != null) {
+                            tvRemoteUrl.setText(remoteServerManager.getServerUrl());
+                        }
+                    }, 500);
+                }
+            } else {
+                if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                    remoteServerManager.stop();
+                    if (tvRemoteUrl != null) tvRemoteUrl.setText("Server Stopped");
+                }
+            }
+        });
+
+        autoSaveSetting(swRemotePin, "remotePinEnabled", isChecked -> {
+            if (layoutPinInput != null) layoutPinInput.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+        });
+
+        if (etRemotePin != null) {
+            etRemotePin.addTextChangedListener(new android.text.TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                public void onTextChanged(CharSequence s, int start, int count, int after) {}
+                public void afterTextChanged(android.text.Editable s) {
+                    String pin = s.toString().trim();
+                    sp.edit().putString("remotePin", pin).apply();
+                    syncSettingToWebView("remotePin", pin);
+                }
+            });
+        }
 
         if (etNasUrl != null) {
             etNasUrl.addTextChangedListener(new android.text.TextWatcher() {
@@ -584,7 +701,7 @@ public class MainActivity extends AppCompatActivity {
             "enabled", "showJukebox", "showSearchChips", "blockAds", "autoSkipNonGacha",
             "autoplayGuard", "autoUnmute", "smoothPlayback", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
             "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
-            "useNasServer", "nasAutoSync"
+            "useNasServer", "nasAutoSync", "remoteServerEnabled", "remotePinEnabled"
     ));
 
     private void applySmoothPlayback(boolean smooth) {
@@ -629,6 +746,87 @@ public class MainActivity extends AppCompatActivity {
         View btnRadio = view.findViewById(R.id.btn_native_instant_radio);
         EditText etSearch = view.findViewById(R.id.et_search_gacha);
         View btnSearchGo = view.findViewById(R.id.btn_search_gacha_go);
+
+        TextView tvQueueHeader = view.findViewById(R.id.tv_jukebox_queue_header);
+        View btnClearQueue = view.findViewById(R.id.btn_jukebox_clear_queue);
+        LinearLayout layoutQueueItems = view.findViewById(R.id.layout_jukebox_queue_items);
+
+        Runnable updateQueueUi = () -> {
+            if (layoutQueueItems == null || tvQueueHeader == null) return;
+            layoutQueueItems.removeAllViews();
+            List<RemoteServerManager.QueueItem> items = remoteServerManager != null ? remoteServerManager.getQueue() : Collections.emptyList();
+            tvQueueHeader.setText("📋 Active Remote Queue (" + items.size() + ")");
+            if (items.isEmpty()) {
+                TextView emptyTv = new TextView(this);
+                emptyTv.setText("No queued videos. Send one from your phone!");
+                emptyTv.setTextColor(0xFF8E88B0);
+                emptyTv.setTextSize(11f);
+                emptyTv.setPadding(4, 8, 4, 8);
+                layoutQueueItems.addView(emptyTv);
+            } else {
+                for (int i = 0; i < items.size(); i++) {
+                    final RemoteServerManager.QueueItem item = items.get(i);
+                    final int pos = i + 1;
+                    LinearLayout itemRow = new LinearLayout(this);
+                    itemRow.setOrientation(LinearLayout.HORIZONTAL);
+                    itemRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                    itemRow.setPadding(0, 8, 0, 8);
+
+                    TextView titleTv = new TextView(this);
+                    LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    titleTv.setLayoutParams(titleLp);
+                    titleTv.setText(pos + ". " + item.title);
+                    titleTv.setTextColor(0xFFFFFFFF);
+                    titleTv.setTextSize(12f);
+                    titleTv.setMaxLines(1);
+                    titleTv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    itemRow.addView(titleTv);
+
+                    TextView playNowBtn = new TextView(this);
+                    playNowBtn.setText("▶ Play");
+                    playNowBtn.setTextColor(0xFF00FFAA);
+                    playNowBtn.setTextSize(11f);
+                    playNowBtn.setPadding(12, 4, 12, 4);
+                    playNowBtn.setOnClickListener(v -> {
+                        if (remoteServerManager != null) {
+                            remoteServerManager.removeQueueItem(item.id);
+                        }
+                        dialog.dismiss();
+                        if (webView != null) webView.loadUrl("https://m.youtube.com/watch?v=" + item.videoId);
+                    });
+                    itemRow.addView(playNowBtn);
+
+                    TextView delBtn = new TextView(this);
+                    delBtn.setText("✕");
+                    delBtn.setTextColor(0xFFFF4444);
+                    delBtn.setTextSize(13f);
+                    delBtn.setPadding(8, 4, 8, 4);
+                    delBtn.setOnClickListener(v -> {
+                        if (remoteServerManager != null) {
+                            remoteServerManager.removeQueueItem(item.id);
+                        }
+                        layoutQueueItems.removeView(itemRow);
+                        int count = remoteServerManager != null ? remoteServerManager.getQueue().size() : 0;
+                        tvQueueHeader.setText("📋 Active Remote Queue (" + count + ")");
+                    });
+                    itemRow.addView(delBtn);
+
+                    layoutQueueItems.addView(itemRow);
+                }
+            }
+        };
+
+        updateQueueUi.run();
+
+        if (btnClearQueue != null) {
+            btnClearQueue.setOnClickListener(v -> {
+                if (remoteServerManager != null) {
+                    remoteServerManager.clearQueue();
+                }
+                updateQueueUi.run();
+                Toast.makeText(this, "Active queue cleared", Toast.LENGTH_SHORT).show();
+            });
+        }
 
         if (btnRadio != null) {
             btnRadio.setOnClickListener(v -> {
@@ -1053,6 +1251,9 @@ public class MainActivity extends AppCompatActivity {
         if (settingsDialog != null && settingsDialog.isShowing()) {
             settingsDialog.dismiss();
         }
+        if (remoteServerManager != null) {
+            remoteServerManager.stop();
+        }
         if (webView != null) {
             webView.destroy();
         }
@@ -1168,6 +1369,54 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 editor.putString(key, jsonValue).apply();
                 Log.e(TAG, "savePref failed for " + key, e);
+            }
+        }
+
+        @JavascriptInterface
+        public String popNextQueuedVideo() {
+            if (remoteServerManager != null) {
+                RemoteServerManager.QueueItem item = remoteServerManager.popNextQueuedVideo();
+                if (item != null) {
+                    return item.toJson().toString();
+                }
+            }
+            return null;
+        }
+
+        @JavascriptInterface
+        public String getQueueJson() {
+            if (remoteServerManager != null) {
+                return remoteServerManager.getQueueJson();
+            }
+            return "[]";
+        }
+
+        @JavascriptInterface
+        public String getRemoteServerUrl() {
+            if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                return remoteServerManager.getServerUrl();
+            }
+            return "";
+        }
+
+        @JavascriptInterface
+        public void updateCurrentPlayback(String videoId, String title, boolean isPlaying, int volume) {
+            if (remoteServerManager != null) {
+                remoteServerManager.updatePlaybackState(videoId, title, isPlaying, volume);
+            }
+        }
+
+        @JavascriptInterface
+        public void clearQueue() {
+            if (remoteServerManager != null) {
+                remoteServerManager.clearQueue();
+            }
+        }
+
+        @JavascriptInterface
+        public void removeQueueItem(String id) {
+            if (remoteServerManager != null) {
+                remoteServerManager.removeQueueItem(id);
             }
         }
     }

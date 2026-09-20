@@ -325,6 +325,27 @@
               </div>
             </div>
           </div>
+
+          <!-- Phone Remote Control & Queue -->
+          <div class="popup-nas-section" style="border: 1px solid rgba(0, 229, 255, 0.3); margin-top: 10px;">
+            <label class="toggle-item popup-nas-header" for="toggleRemoteServer">
+              <div class="toggle-desc">
+                <span class="toggle-title">📱 Phone Remote &amp; Queue</span>
+                <span class="toggle-sub">Add songs &amp; control playback from phone</span>
+              </div>
+              <input type="checkbox" id="toggleRemoteServer" class="mini-switch" checked>
+            </label>
+
+            <div id="popupRemoteDetails" class="popup-nas-details">
+              <div class="popup-nas-input-group">
+                <label>Remote Web URL:</label>
+                <div class="popup-nas-input-row">
+                  <input type="text" id="popupRemoteUrlInput" class="popup-nas-input" readonly value="http://127.0.0.1:3000/remote">
+                  <button type="button" id="btnPopupCopyRemoteUrl" class="btn-popup-test">📋 Copy</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
