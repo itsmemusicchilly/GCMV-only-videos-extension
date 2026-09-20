@@ -2448,6 +2448,300 @@
     ensureAudioContextResumed();
   }
 
+  // ==========================================================
+  // Cloud WebRTC / PeerJS Remote Host Engine (Zero-Script)
+  // ==========================================================
+  let cloudPeer = null;
+  let cloudConnections = [];
+  let cloudRoomCode = "";
+  let cloudRemoteQueue = [];
+
+  function generateRoomCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let res = "GCMV-";
+    for (let i = 0; i < 4; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return res;
+  }
+
+  function getPlaybackStateObject() {
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const videoId = getCurrentVideoId();
+    const titleEl = document.querySelector("h1.title, h1.ytm-watch-video-title, #title h1, .slim-video-information-title, yt-formatted-string.ytd-watch-metadata");
+    const title = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, "").trim();
+    const isPlaying = video ? !video.paused && !video.ended : false;
+    const volume = video ? Math.round(video.volume * 100) : 100;
+    const currentTime = video ? video.currentTime : 0;
+    const duration = video ? video.duration : 0;
+
+    return {
+      type: "STATE",
+      currentVideo: { videoId, title, currentTime, duration },
+      isPlaying,
+      volume,
+      queue: cloudRemoteQueue,
+      roomCode: cloudRoomCode
+    };
+  }
+
+  function sendCloudStateToPeer(conn) {
+    if (conn && conn.open) {
+      try {
+        conn.send(getPlaybackStateObject());
+      } catch (_) {}
+    }
+  }
+
+  function broadcastCloudState() {
+    if (cloudConnections.length === 0) return;
+    const state = getPlaybackStateObject();
+    cloudConnections.forEach(conn => {
+      if (conn && conn.open) {
+        try { conn.send(state); } catch (_) {}
+      }
+    });
+  }
+
+  async function performYouTubeSearch(query) {
+    try {
+      const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+      const res = await fetch(searchUrl);
+      if (!res.ok) return [];
+      const html = await res.text();
+      return parseYouTubeSearchResultsFromHtml(html);
+    } catch (e) {
+      console.warn("[GCMV] YouTube search error:", e);
+      return [];
+    }
+  }
+
+  function parseYouTubeSearchResultsFromHtml(html) {
+    const marker = "var ytInitialData = ";
+    let idx = html.indexOf(marker);
+    if (idx === -1) {
+      const marker2 = 'window["ytInitialData"] = ';
+      idx = html.indexOf(marker2);
+      if (idx === -1) return [];
+      idx += marker2.length;
+    } else {
+      idx += marker.length;
+    }
+
+    let endIdx = html.indexOf(";</script>", idx);
+    if (endIdx === -1) endIdx = html.indexOf(";\n", idx);
+    if (endIdx === -1) return [];
+
+    try {
+      const jsonStr = html.substring(idx, endIdx).trim();
+      const root = JSON.parse(jsonStr);
+      const results = [];
+
+      const contents =
+        root.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
+      if (!Array.isArray(contents)) return results;
+
+      for (const section of contents) {
+        const items = section.itemSectionRenderer?.contents;
+        if (!Array.isArray(items)) continue;
+
+        for (const item of items) {
+          const vr = item.videoRenderer;
+          if (!vr || !vr.videoId) continue;
+
+          const videoId = vr.videoId;
+          let title = "";
+          if (vr.title?.runs && vr.title.runs.length > 0) {
+            title = vr.title.runs.map(r => r.text).join("");
+          } else if (vr.title?.simpleText) {
+            title = vr.title.simpleText;
+          }
+
+          let channel = "";
+          if (vr.ownerText?.runs && vr.ownerText.runs.length > 0) {
+            channel = vr.ownerText.runs.map(r => r.text).join("");
+          }
+
+          let thumbnail = "";
+          if (vr.thumbnail?.thumbnails && vr.thumbnail.thumbnails.length > 0) {
+            const thumbs = vr.thumbnail.thumbnails;
+            thumbnail = thumbs[thumbs.length - 1].url;
+          } else {
+            thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+          }
+
+          results.push({ videoId, title, channel, thumbnail });
+          if (results.length >= 20) break;
+        }
+        if (results.length >= 20) break;
+      }
+      return results;
+    } catch (e) {
+      console.warn("[GCMV] Search parse error:", e);
+      return [];
+    }
+  }
+
+  async function handleCloudRemoteCommand(data, conn) {
+    if (!data || typeof data !== "object") return;
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+
+    switch (data.action) {
+      case "get_state":
+        sendCloudStateToPeer(conn);
+        break;
+
+      case "play":
+        if (video) video.play().catch(() => {});
+        broadcastCloudState();
+        break;
+
+      case "pause":
+        if (video) video.pause();
+        broadcastCloudState();
+        break;
+
+      case "skip":
+        checkAndEnforceGachaNext(true);
+        setTimeout(broadcastCloudState, 1000);
+        break;
+
+      case "volume":
+        if (video && typeof data.value === "number") {
+          video.volume = Math.max(0, Math.min(100, data.value)) / 100;
+          broadcastCloudState();
+        }
+        break;
+
+      case "seek":
+        if (video && typeof data.time === "number") {
+          video.currentTime = data.time;
+          broadcastCloudState();
+        }
+        break;
+
+      case "play_now":
+        if (data.videoId) {
+          navigateToVideo(data.videoId, data.title || "");
+          setTimeout(broadcastCloudState, 1200);
+        }
+        break;
+
+      case "play_next":
+        if (data.videoId) {
+          cloudRemoteQueue.unshift({
+            id: "q_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4),
+            videoId: data.videoId,
+            title: data.title || data.videoId,
+            addedAt: Date.now()
+          });
+          await extStorage.set({ cloudRemoteQueue });
+          broadcastCloudState();
+          if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+        }
+        break;
+
+      case "add_queue":
+        if (data.videoId) {
+          cloudRemoteQueue.push({
+            id: "q_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4),
+            videoId: data.videoId,
+            title: data.title || data.videoId,
+            addedAt: Date.now()
+          });
+          await extStorage.set({ cloudRemoteQueue });
+          broadcastCloudState();
+          if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+        }
+        break;
+
+      case "remove_queue":
+        if (data.id) {
+          cloudRemoteQueue = cloudRemoteQueue.filter(item => item.id !== data.id);
+          await extStorage.set({ cloudRemoteQueue });
+          broadcastCloudState();
+          if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+        }
+        break;
+
+      case "clear_queue":
+        cloudRemoteQueue = [];
+        await extStorage.set({ cloudRemoteQueue });
+        broadcastCloudState();
+        if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+        break;
+
+      case "search":
+        if (data.query) {
+          const results = await performYouTubeSearch(data.query);
+          if (conn && conn.open) {
+            conn.send({ type: "SEARCH_RESULTS", query: data.query, results });
+          }
+        }
+        break;
+    }
+  }
+
+  async function initCloudRemoteHost() {
+    if (typeof Peer === "undefined") {
+      console.warn("[GCMV] PeerJS library not loaded, skipping Cloud Remote Host");
+      return;
+    }
+
+    try {
+      const stored = await extStorage.get({ cloudRoomCode: "", cloudRemoteEnabled: true, cloudRemoteQueue: [] });
+      if (stored.cloudRemoteEnabled === false) return;
+
+      cloudRoomCode = stored.cloudRoomCode || generateRoomCode();
+      if (!stored.cloudRoomCode) {
+        await extStorage.set({ cloudRoomCode });
+      }
+      if (Array.isArray(stored.cloudRemoteQueue)) {
+        cloudRemoteQueue = stored.cloudRemoteQueue;
+      }
+
+      const cleanCode = cloudRoomCode.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const peerId = `gcmv-${cleanCode}`;
+
+      if (cloudPeer) {
+        try { cloudPeer.destroy(); } catch (_) {}
+      }
+
+      cloudPeer = new Peer(peerId);
+
+      cloudPeer.on("open", (id) => {
+        console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
+      });
+
+      cloudPeer.on("connection", (conn) => {
+        cloudConnections.push(conn);
+        console.log(`[GCMV] 📱 Phone connected via Cloud P2P! (${conn.peer})`);
+
+        conn.on("open", () => {
+          sendCloudStateToPeer(conn);
+        });
+
+        conn.on("data", async (data) => {
+          handleCloudRemoteCommand(data, conn);
+        });
+
+        conn.on("close", () => {
+          cloudConnections = cloudConnections.filter(c => c !== conn);
+        });
+
+        conn.on("error", () => {
+          cloudConnections = cloudConnections.filter(c => c !== conn);
+        });
+      });
+
+      cloudPeer.on("error", (err) => {
+        console.warn("[GCMV] Cloud Remote Peer error:", err);
+      });
+    } catch (e) {
+      console.warn("[GCMV] Error initializing Cloud Remote Host:", e);
+    }
+  }
+
   function reportPlaybackStateToRemote() {
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     const videoId = getCurrentVideoId();
@@ -2457,6 +2751,8 @@
     const title = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, "").trim();
     const isPlaying = video ? !video.paused && !video.ended : false;
     const volume = video ? Math.round(video.volume * 100) : 100;
+
+    broadcastCloudState();
 
     if (window.AndroidBridge && typeof window.AndroidBridge.updateCurrentPlayback === "function") {
       try {
@@ -2764,6 +3060,7 @@
     applyFeatures();
     setupFullscreenListener();
     startRemoteControlPolling();
+    initCloudRemoteHost();
 
     startStillWatchingGuard();
     document.addEventListener("visibilitychange", () => {
@@ -4204,9 +4501,13 @@
     async function refreshInpageQueue() {
       if (!inpageQueueItems || !inpageQueueCount) return;
       let items = [];
+      if (cloudRemoteQueue && cloudRemoteQueue.length > 0) {
+        items = [...cloudRemoteQueue];
+      }
       if (window.AndroidBridge && typeof window.AndroidBridge.getQueueJson === "function") {
         try {
-          items = JSON.parse(window.AndroidBridge.getQueueJson()) || [];
+          const bridgeItems = JSON.parse(window.AndroidBridge.getQueueJson()) || [];
+          items = [...items, ...bridgeItems];
         } catch (e) {}
       } else {
         const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
@@ -4214,7 +4515,7 @@
           const res = await fetch(serverUrl + "/api/queue", { cache: "no-store" });
           if (res.ok) {
             const data = await res.json();
-            items = data.queue || [];
+            items = [...items, ...(data.queue || [])];
           }
         } catch (e) {}
       }
@@ -4236,6 +4537,11 @@
           btn.onclick = () => {
             const vid = btn.getAttribute("data-vid");
             const qId = btn.getAttribute("data-id");
+            if (cloudRemoteQueue && cloudRemoteQueue.some(it => it.id === qId)) {
+              cloudRemoteQueue = cloudRemoteQueue.filter(it => it.id !== qId);
+              extStorage.set({ cloudRemoteQueue }).catch(() => {});
+              broadcastCloudState();
+            }
             if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
               window.AndroidBridge.removeQueueItem(qId);
             }
@@ -4246,6 +4552,11 @@
         inpageQueueItems.querySelectorAll(".btn-inpage-del-item").forEach(btn => {
           btn.onclick = async () => {
             const qId = btn.getAttribute("data-id");
+            if (cloudRemoteQueue && cloudRemoteQueue.some(it => it.id === qId)) {
+              cloudRemoteQueue = cloudRemoteQueue.filter(it => it.id !== qId);
+              await extStorage.set({ cloudRemoteQueue });
+              broadcastCloudState();
+            }
             if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
               window.AndroidBridge.removeQueueItem(qId);
             } else {
@@ -4260,6 +4571,9 @@
 
     if (btnInpageClearQueue) {
       btnInpageClearQueue.onclick = async () => {
+        cloudRemoteQueue = [];
+        await extStorage.set({ cloudRemoteQueue });
+        broadcastCloudState();
         if (window.AndroidBridge && typeof window.AndroidBridge.clearQueue === "function") {
           window.AndroidBridge.clearQueue();
         } else {
@@ -4327,7 +4641,11 @@
             }
           }
           if (!bestUrl) {
-            bestUrl = "http://127.0.0.1:3000/remote";
+            if (cloudRoomCode) {
+              bestUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+            } else {
+              bestUrl = "http://127.0.0.1:3000/remote";
+            }
           }
           inpageRemoteUrlInput.value = bestUrl;
           renderInpageQrCode(bestUrl);
@@ -4335,7 +4653,20 @@
           const chipsContainer = widget.querySelector("#inpageRemoteIpChips");
           if (chipsContainer) {
             chipsContainer.innerHTML = "";
-            if (addresses.length > 1) {
+            if (cloudRoomCode) {
+              const roomBtn = document.createElement("button");
+              roomBtn.type = "button";
+              roomBtn.className = "gacha-btn-nas-test";
+              roomBtn.textContent = `🔑 Room: ${cloudRoomCode}`;
+              roomBtn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer; background:linear-gradient(135deg,#ff2e93,#7928ca);";
+              roomBtn.onclick = () => {
+                const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+                inpageRemoteUrlInput.value = cloudUrl;
+                renderInpageQrCode(cloudUrl);
+              };
+              chipsContainer.appendChild(roomBtn);
+            }
+            if (addresses.length > 0) {
               chipsContainer.style.display = "flex";
               addresses.forEach((info) => {
                 const btn = document.createElement("button");
@@ -4351,6 +4682,8 @@
                 };
                 chipsContainer.appendChild(btn);
               });
+            } else if (cloudRoomCode) {
+              chipsContainer.style.display = "flex";
             } else {
               chipsContainer.style.display = "none";
             }
@@ -5259,6 +5592,17 @@
     if (!settings.enabled || (!settings.autoplayGuard && !isExplicitSkip)) return;
 
     ensureYoutubeAutoplayToggleOn();
+
+    // 0. Check for queued video from Cloud Remote P2P Queue
+    if (cloudRemoteQueue && cloudRemoteQueue.length > 0) {
+      const item = cloudRemoteQueue.shift();
+      extStorage.set({ cloudRemoteQueue }).catch(() => {});
+      broadcastCloudState();
+      if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+      showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
+      navigateToVideo(item.videoId, item.title);
+      return;
+    }
 
     // 1. Check for queued video from Android APK Bridge
     if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {

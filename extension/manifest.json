@@ -48,6 +48,7 @@
       ],
       "js": [
         "content/qrcode.min.js",
+        "content/peerjs.min.js",
         "content/content.js"
       ],
       "css": [
@@ -59,7 +60,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "icons/*.png"
+        "icons/*.png",
+        "remote/*"
       ],
       "matches": [
         "*://*.youtube.com/*",

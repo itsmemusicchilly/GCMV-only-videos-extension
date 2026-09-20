@@ -17,9 +17,11 @@ echo "=========================================================="
 echo "📦 Syncing extension assets to Android project..."
 mkdir -p "$SCRIPT_DIR/android-app/app/src/main/assets/extension/icons"
 mkdir -p "$SCRIPT_DIR/android-app/app/src/main/assets/extension/popup"
+mkdir -p "$SCRIPT_DIR/android-app/app/src/main/assets/extension/remote"
 cp -r "$SCRIPT_DIR/extension/content/"* "$SCRIPT_DIR/android-app/app/src/main/assets/extension/"
 cp "$SCRIPT_DIR/extension/chrome_polyfill.js" "$SCRIPT_DIR/android-app/app/src/main/assets/extension/chrome_polyfill.js"
 cp -r "$SCRIPT_DIR/extension/popup/"* "$SCRIPT_DIR/android-app/app/src/main/assets/extension/popup/"
+cp -r "$SCRIPT_DIR/extension/remote/"* "$SCRIPT_DIR/android-app/app/src/main/assets/extension/remote/"
 cp -r "$SCRIPT_DIR/extension/icons/"* "$SCRIPT_DIR/android-app/app/src/main/assets/extension/icons/"
 
 # 2. Build APK with Gradle

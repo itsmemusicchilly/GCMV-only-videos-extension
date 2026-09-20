@@ -43,6 +43,8 @@
         "*://youtube.com/*"
       ],
       "js": [
+        "content/qrcode.min.js",
+        "content/peerjs.min.js",
         "content/content.js"
       ],
       "css": [
@@ -52,7 +54,8 @@
     }
   ],
   "web_accessible_resources": [
-    "icons/*.png"
+    "icons/*.png",
+    "remote/*"
   ],
   "browser_specific_settings": {
     "gecko": {

@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🌸 Gacha MV Remote (Cloud P2P)</title>
+  <style>
+    :root {
+      --bg: #0d0a1a;
+      --card-bg: #16122a;
+      --card-border: rgba(255, 46, 147, 0.25);
+      --pink: #ff2e93;
+      --cyan: #00e5ff;
+      --green: #00ffaa;
+      --text: #ffffff;
+      --subtext: #a09bb8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 14px; min-height: 100vh; max-width: 500px; margin: 0 auto; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--card-border); }
+    h1 { font-size: 18px; color: var(--text); font-weight: 800; display: flex; align-items: center; gap: 6px; }
+    .badge { font-size: 10px; border-radius: 12px; padding: 3px 8px; font-weight: 700; transition: all 0.2s; display: inline-flex; align-items: center; gap: 4px; }
+    .badge-disconnected { background: rgba(255,82,82,0.15); color: #ff5252; border: 1px solid rgba(255,82,82,0.3); }
+    .badge-connecting { background: rgba(255,193,7,0.15); color: #ffc107; border: 1px solid rgba(255,193,7,0.3); }
+    .badge-connected { background: rgba(0,255,170,0.15); color: var(--green); border: 1px solid var(--green); }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 14px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    .card-title { font-size: 12px; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+    .now-playing-title { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; margin-bottom: 8px; word-break: break-word; min-height: 20px; }
+    .now-playing-meta { font-size: 11px; color: var(--subtext); display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .ctrl-row { display: flex; gap: 10px; margin-top: 10px; }
+    .btn-ctrl { flex: 1; height: 46px; border: none; border-radius: 12px; background: rgba(255,255,255,0.08); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-ctrl:active { transform: scale(0.96); background: rgba(255,255,255,0.18); }
+    .btn-primary { background: linear-gradient(135deg, var(--pink), #8f00ff); color: #fff; }
+    .btn-accent { background: rgba(0, 229, 255, 0.2); border: 1px solid var(--cyan); color: var(--cyan); }
+    .input-box { width: 100%; height: 44px; background: #211a3e; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 0 12px; color: #fff; font-size: 14px; margin-bottom: 10px; outline: none; }
+    .input-box:focus { border-color: var(--pink); box-shadow: 0 0 10px rgba(255,46,147,0.3); }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .btn-act { height: 40px; border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s; }
+    .btn-act:active { transform: scale(0.96); }
+    .btn-now { background: var(--pink); color: #fff; }
+    .btn-next { background: #6b21a8; color: #fff; border: 1px solid #a855f7; }
+    .btn-queue { background: rgba(0,229,255,0.15); color: var(--cyan); border: 1px solid var(--cyan); }
+    .search-item { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+    .search-thumb-row { display: flex; gap: 10px; align-items: center; }
+    .search-thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: #222; }
+    .search-meta { flex: 1; min-width: 0; }
+    .search-title { font-size: 13px; font-weight: 700; color: #fff; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .search-channel { font-size: 11px; color: var(--subtext); margin-top: 3px; }
+    .queue-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .queue-num { font-size: 12px; font-weight: 800; color: var(--cyan); margin-right: 10px; min-width: 18px; }
+    .queue-title { font-size: 13px; font-weight: 600; color: #eee; flex: 1; word-break: break-word; }
+    .queue-del { background: none; border: none; color: #ff4444; font-size: 16px; padding: 6px; cursor: pointer; }
+    .queue-empty { color: var(--subtext); font-size: 13px; font-style: italic; text-align: center; padding: 16px 0; }
+    .vol-wrap { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+    .vol-slider { flex: 1; accent-color: var(--pink); height: 6px; }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #2e1b4e; border: 1px solid var(--pink); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; box-shadow: 0 4px 15px rgba(0,0,0,0.5); opacity: 0; pointer-events: none; transition: opacity 0.25s ease; z-index: 100; }
+    .toast.show { opacity: 1; }
+    .room-bar { display: flex; gap: 8px; align-items: center; }
+    .room-input { flex: 1; height: 40px; background: #211a3e; border: 1px solid rgba(0,229,255,0.3); border-radius: 10px; padding: 0 10px; color: #00ffaa; font-weight: 700; font-family: monospace; font-size: 15px; text-transform: uppercase; outline: none; }
+    .btn-room { height: 40px; padding: 0 14px; border: none; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; background: var(--pink); color: #fff; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌸 Gacha MV Remote</h1>
+    <span class="badge badge-disconnected" id="connBadge">● DISCONNECTED</span>
+  </header>
+
+  <!-- Room Pairing Card -->
+  <div class="card" id="roomCard">
+    <div class="card-title">🔑 Room Pairing</div>
+    <div class="room-bar">
+      <input type="text" id="inputRoomCode" class="room-input" placeholder="e.g. GCMV-8492" maxlength="12" autocomplete="off">
+      <button id="btnConnectRoom" class="btn-room">Connect</button>
+    </div>
+    <div id="roomHint" style="font-size: 10px; color: var(--subtext); margin-top: 6px;">
+      Enter the Room Code shown in your computer's extension popup or Jukebox drawer.
+    </div>
+  </div>
+
+  <!-- Main Controls View (Active when connected) -->
+  <div id="mainControlsView" class="hidden">
+    <!-- Now Playing -->
+    <div class="card">
+      <div class="card-title">🎵 Now Playing on Player</div>
+      <div class="now-playing-title" id="nowPlayingTitle">Waiting for player...</div>
+      <div class="now-playing-meta">
+        <span id="playerTime">0:00 / 0:00</span>
+        <span id="activeRoomTag" style="color:var(--cyan); font-family:monospace; font-weight:700;"></span>
+      </div>
+      <div class="ctrl-row">
+        <button class="btn-ctrl btn-primary" id="btnPlayPause">⏸️ Pause</button>
+        <button class="btn-ctrl btn-accent" id="btnSkipNext">⏭️ Skip</button>
+      </div>
+      <div class="vol-wrap">
+        <span style="font-size:12px; font-weight:700;">🔊 Vol:</span>
+        <input type="range" id="sliderVol" class="vol-slider" min="0" max="200" value="100">
+        <span id="volVal" style="font-size:11px; color:var(--cyan); min-width:36px;">100%</span>
+      </div>
+    </div>
+
+    <!-- Search YouTube -->
+    <div class="card">
+      <div class="card-title">🔍 Search YouTube / GCMV</div>
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <input type="text" id="inputSearch" class="input-box" style="margin-bottom:0;" placeholder="Search songs, GCMV, GLMV...">
+        <button class="btn-ctrl btn-primary" id="btnSearch" style="width:76px; height:44px; flex:none; font-size:14px;">Go</button>
+      </div>
+      <div id="searchResults" style="display:flex; flex-direction:column; max-height:360px; overflow-y:auto;"></div>
+    </div>
+
+    <!-- Add Video to Queue by URL or ID -->
+    <div class="card">
+      <div class="card-title">➕ Add Video from Link / ID</div>
+      <input type="text" id="inputUrl" class="input-box" placeholder="Paste YouTube link or Video ID...">
+      <div class="btn-grid">
+        <button class="btn-act btn-now" id="btnPlayNow">▶️ Play Now</button>
+        <button class="btn-act btn-next" id="btnPlayNext">⏭️ Play Next</button>
+        <button class="btn-act btn-queue" id="btnAddQueue">➕ Add Queue</button>
+      </div>
+    </div>
+
+    <!-- Active Queue -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div class="card-title" style="margin-bottom:0;">📋 Active Queue (<span id="queueCount">0</span>)</div>
+        <button id="btnClearQueue" style="background:none; border:none; color:var(--pink); font-size:12px; font-weight:700; cursor:pointer;">Clear All</button>
+      </div>
+      <div id="queueList"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- PeerJS Client Library -->
+  <script src="peerjs.min.js"></script>
+  <script>
+    let peer = null;
+    let conn = null;
+    let activeRoomCode = "";
+    let isPlaying = false;
+    let reconnectTimeout = null;
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 2500);
+    }
+
+    function setConnectionBadge(state, text) {
+      const b = document.getElementById("connBadge");
+      b.className = "badge " + (state === "connected" ? "badge-connected" : state === "connecting" ? "badge-connecting" : "badge-disconnected");
+      b.textContent = (state === "connected" ? "● " : state === "connecting" ? "◌ " : "○ ") + text;
+    }
+
+    function sanitizeRoomCode(raw) {
+      return (raw || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    }
+
+    function formatTime(sec) {
+      const s = Math.floor(sec || 0);
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return `${m}:${rem < 10 ? '0' : ''}${rem}`;
+    }
+
+    function sendCommand(cmd) {
+      if (!conn || !conn.open) {
+        showToast("⚠️ Not connected to player");
+        return;
+      }
+      conn.send(cmd);
+    }
+
+    function connectToRoom(code) {
+      const cleanCode = sanitizeRoomCode(code);
+      if (!cleanCode) {
+        showToast("⚠️ Enter a valid Room Code");
+        return;
+      }
+
+      activeRoomCode = cleanCode;
+      localStorage.setItem("gcmv_last_room", cleanCode);
+      setConnectionBadge("connecting", "CONNECTING...");
+
+      if (peer) {
+        try { peer.destroy(); } catch (_) {}
+      }
+
+      peer = new Peer();
+
+      peer.on("open", () => {
+        const targetPeerId = `gcmv-${cleanCode.toLowerCase()}`;
+        conn = peer.connect(targetPeerId, { reliable: true });
+
+        conn.on("open", () => {
+          setConnectionBadge("connected", `ROOM ${cleanCode}`);
+          document.getElementById("mainControlsView").classList.remove("hidden");
+          document.getElementById("activeRoomTag").textContent = `Room: ${cleanCode}`;
+          document.getElementById("inputRoomCode").value = cleanCode;
+          showToast(`🟢 Connected to Room ${cleanCode}!`);
+          // Request initial playback state
+          conn.send({ action: "get_state" });
+        });
+
+        conn.on("data", (data) => {
+          handleIncomingData(data);
+        });
+
+        conn.on("close", () => {
+          setConnectionBadge("disconnected", "DISCONNECTED");
+          showToast("🔴 Disconnected from player");
+          scheduleReconnect();
+        });
+
+        conn.on("error", (err) => {
+          console.warn("[GCMV Remote] Connection error:", err);
+          setConnectionBadge("disconnected", "ERROR");
+          showToast("❌ Connection failed. Check room code.");
+        });
+      });
+
+      peer.on("error", (err) => {
+        console.warn("[GCMV Remote] Peer error:", err);
+        setConnectionBadge("disconnected", "PEER ERROR");
+        showToast("❌ Cloud connection error");
+      });
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      reconnectTimeout = setTimeout(() => {
+        if (activeRoomCode && (!conn || !conn.open)) {
+          connectToRoom(activeRoomCode);
+        }
+      }, 4000);
+    }
+
+    function handleIncomingData(data) {
+      if (!data) return;
+
+      if (data.type === "STATE") {
+        if (data.currentVideo) {
+          document.getElementById("nowPlayingTitle").textContent = data.currentVideo.title || "Playing video";
+          const cur = formatTime(data.currentVideo.currentTime);
+          const dur = formatTime(data.currentVideo.duration);
+          document.getElementById("playerTime").textContent = `${cur} / ${dur}`;
+        }
+        isPlaying = Boolean(data.isPlaying);
+        document.getElementById("btnPlayPause").textContent = isPlaying ? "⏸️ Pause" : "▶️ Play";
+
+        if (typeof data.volume === "number") {
+          document.getElementById("sliderVol").value = data.volume;
+          document.getElementById("volVal").textContent = `${Math.round(data.volume)}%`;
+        }
+
+        renderQueue(data.queue || []);
+      } else if (data.type === "SEARCH_RESULTS") {
+        renderSearchResults(data.results || []);
+      } else if (data.type === "TOAST") {
+        showToast(data.message || "");
+      }
+    }
+
+    function renderQueue(queue) {
+      document.getElementById("queueCount").textContent = queue.length;
+      const qList = document.getElementById("queueList");
+      if (!queue || queue.length === 0) {
+        qList.innerHTML = '<div class="queue-empty">Queue is empty. Add a video above!</div>';
+        return;
+      }
+      qList.innerHTML = queue.map((item, idx) => `
+        <div class="queue-item">
+          <span class="queue-num">${idx + 1}</span>
+          <span class="queue-title">${item.title || item.videoId}</span>
+          <button class="queue-del" onclick="deleteQueueItem('${item.id}')" title="Remove">🗑️</button>
+        </div>
+      `).join('');
+    }
+
+    window.deleteQueueItem = function(id) {
+      sendCommand({ action: "remove_queue", id: id });
+    };
+
+    function renderSearchResults(results) {
+      const container = document.getElementById("searchResults");
+      if (!results || results.length === 0) {
+        container.innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">No results found</div>';
+        return;
+      }
+      window._lastSearchResults = results;
+      container.innerHTML = results.map((item, idx) => `
+        <div class="search-item">
+          <div class="search-thumb-row">
+            <img class="search-thumb" src="${item.thumbnail || ''}" alt="" onerror="this.style.display='none'">
+            <div class="search-meta">
+              <div class="search-title">${item.title || 'Video'}</div>
+              <div class="search-channel">${item.channel || ''}</div>
+            </div>
+          </div>
+          <div class="btn-grid">
+            <button class="btn-act btn-now" onclick="actionSearchResult('${item.videoId || item.id}', ${idx}, 'play_now')">▶️ Play Now</button>
+            <button class="btn-act btn-next" onclick="actionSearchResult('${item.videoId || item.id}', ${idx}, 'play_next')">⏭️ Play Next</button>
+            <button class="btn-act btn-queue" onclick="actionSearchResult('${item.videoId || item.id}', ${idx}, 'add_queue')">➕ Add Queue</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    window.actionSearchResult = function(id, idx, action) {
+      const item = (window._lastSearchResults && window._lastSearchResults[idx]) || { videoId: id, id: id };
+      const targetId = item.videoId || item.id || id;
+      sendCommand({
+        action: action,
+        videoId: targetId,
+        title: item.title || "Video"
+      });
+      const actLabel = action === "play_now" ? "▶️ Playing now!" : action === "play_next" ? "⏭️ Queued next!" : "➕ Added to queue!";
+      showToast(actLabel);
+    };
+
+    // UI Event Listeners
+    document.getElementById("btnConnectRoom").addEventListener("click", () => {
+      const code = document.getElementById("inputRoomCode").value;
+      connectToRoom(code);
+    });
+
+    document.getElementById("btnPlayPause").addEventListener("click", () => {
+      sendCommand({ action: isPlaying ? "pause" : "play" });
+    });
+
+    document.getElementById("btnSkipNext").addEventListener("click", () => {
+      sendCommand({ action: "skip" });
+    });
+
+    const sliderVol = document.getElementById("sliderVol");
+    sliderVol.addEventListener("input", (e) => {
+      const val = parseInt(e.target.value, 10);
+      document.getElementById("volVal").textContent = `${val}%`;
+      sendCommand({ action: "volume", value: val });
+    });
+
+    document.getElementById("btnSearch").addEventListener("click", () => {
+      const q = document.getElementById("inputSearch").value.trim();
+      if (!q) return showToast("⚠️ Enter a search query");
+      document.getElementById("searchResults").innerHTML = '<div style="color:var(--subtext); text-align:center; padding:15px;">🔍 Searching...</div>';
+      sendCommand({ action: "search", query: q });
+    });
+
+    document.getElementById("inputSearch").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("btnSearch").click();
+    });
+
+    function addFromInput(action) {
+      const input = document.getElementById("inputUrl");
+      const val = input.value.trim();
+      if (!val) return showToast("⚠️ Paste a YouTube URL or Video ID");
+
+      let videoId = val;
+      const m = val.match(/(?:v=|\/embed\/|youtu\.be\/|\/v\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+      if (m) videoId = m[1];
+
+      sendCommand({ action: action, videoId: videoId, title: "" });
+      input.value = "";
+      showToast(action === "play_now" ? "▶️ Playing now!" : action === "play_next" ? "⏭️ Queued next!" : "➕ Added to queue!");
+    }
+
+    document.getElementById("btnPlayNow").addEventListener("click", () => addFromInput("play_now"));
+    document.getElementById("btnPlayNext").addEventListener("click", () => addFromInput("play_next"));
+    document.getElementById("btnAddQueue").addEventListener("click", () => addFromInput("add_queue"));
+
+    document.getElementById("btnClearQueue").addEventListener("click", () => {
+      sendCommand({ action: "clear_queue" });
+      showToast("🗑️ Queue cleared");
+    });
+
+    // Auto-connect from URL params (e.g. ?room=GCMV-8492) or localStorage
+    window.addEventListener("DOMContentLoaded", () => {
+      const params = new URLSearchParams(window.location.search);
+      const roomParam = params.get("room") || localStorage.getItem("gcmv_last_room");
+      if (roomParam) {
+        document.getElementById("inputRoomCode").value = roomParam;
+        connectToRoom(roomParam);
+      }
+    });
+  </script>
+</body>
+</html>

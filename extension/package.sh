@@ -18,6 +18,7 @@ cp background.js "$STAGING_DIR/"
 cp -r icons "$STAGING_DIR/"
 cp -r content "$STAGING_DIR/"
 cp -r popup "$STAGING_DIR/"
+cp -r remote "$STAGING_DIR/"
 
 # Remove any hidden OS/editor files from staging
 find "$STAGING_DIR" -type f -name ".*" -delete

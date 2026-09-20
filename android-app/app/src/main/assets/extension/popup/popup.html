@@ -78,9 +78,9 @@
             <div>
               <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="font-size: 12px; font-weight: 700; color: #fff;">Phone Remote &amp; Queue</span>
-                <span id="popupRemoteStatusBadge" style="display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 10px; background: rgba(255,82,82,0.15); color: #ff5252; border: 1px solid rgba(255,82,82,0.3);">
+                <span id="popupRemoteStatusBadge" style="display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 10px; background: rgba(0,255,170,0.15); color: #00ffaa; border: 1px solid rgba(0,255,170,0.3);">
                   <span class="status-dot" style="width: 5px; height: 5px; background: currentColor; box-shadow: 0 0 6px currentColor; border-radius: 50%;"></span>
-                  <span id="popupRemoteStatusText">OFFLINE</span>
+                  <span id="popupRemoteStatusText">CLOUD READY</span>
                 </span>
               </div>
               <div style="font-size: 10px; color: var(--text-muted);">Control playback &amp; queue from mobile</div>
@@ -91,39 +91,79 @@
           </label>
         </div>
 
+        <!-- Mode Tabs -->
+        <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+          <button type="button" id="btnTabCloudRemote" class="btn-vol-preset active" style="flex:1; padding: 4px 6px; font-size: 10px;">🌐 Cloud (No Script)</button>
+          <button type="button" id="btnTabLocalRemote" class="btn-vol-preset" style="flex:1; padding: 4px 6px; font-size: 10px;">💻 Local Server</button>
+        </div>
+
         <div id="popupRemoteDetails" class="popup-nas-details" style="background: rgba(0, 0, 0, 0.25); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); padding: 8px;">
-          <!-- ONLINE VIEW (Shown when server is running) -->
-          <div id="popupRemoteOnlineView" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- CLOUD ROOM VIEW (Zero-Script Mode) -->
+          <div id="popupCloudRoomView" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; background: #151128; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(0,229,255,0.25);">
+              <div>
+                <div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase;">Room Code</div>
+                <div id="popupCloudRoomCodeText" style="font-size: 15px; font-weight: 800; color: #00ffaa; font-family: monospace; letter-spacing: 1px;">GCMV-8492</div>
+              </div>
+              <div style="display: flex; gap: 4px;">
+                <button type="button" id="btnPopupCopyRoomCode" class="btn-popup-test" style="font-size: 9px; padding: 3px 8px;" title="Copy 6-character Room Code">📋 Code</button>
+                <button type="button" id="btnPopupRegenRoomCode" class="btn-vol-reset" style="font-size: 9px; padding: 3px 6px;" title="Generate new Room Code">🔄</button>
+              </div>
+            </div>
+
             <div class="popup-nas-input-group">
               <label style="font-size: 10px; color: var(--text-secondary); display: flex; justify-content: space-between;">
-                <span>Remote Web URL:</span>
-                <span style="color: #00ffaa; font-size: 9px;">Ready to connect</span>
+                <span>Mobile Remote Link:</span>
+                <span style="color: #00ffaa; font-size: 9px;">P2P Encrypted</span>
               </label>
               <div class="popup-nas-input-row" style="display: flex; gap: 6px;">
-                <input type="text" id="popupRemoteUrlInput" class="popup-nas-input" readonly value="http://127.0.0.1:3000/remote" style="font-size: 11px; flex: 1;">
-                <button type="button" id="btnPopupCopyRemoteUrl" class="btn-popup-test" title="Copy Remote URL" style="padding: 4px 8px; font-size: 10px;">📋 Copy</button>
-                <button type="button" id="btnPopupOpenRemoteTab" class="btn-popup-test" title="Open Remote Web Interface in New Tab" style="background: linear-gradient(135deg, #ff2e93, #7928ca); padding: 4px 8px; font-size: 10px;">🌐 Open</button>
+                <input type="text" id="popupCloudRemoteUrlInput" class="popup-nas-input" readonly value="" style="font-size: 11px; flex: 1;">
+                <button type="button" id="btnPopupCopyCloudUrl" class="btn-popup-test" title="Copy Mobile Remote Link" style="padding: 4px 8px; font-size: 10px;">📋 Copy</button>
+                <button type="button" id="btnPopupOpenCloudTab" class="btn-popup-test" title="Open Web Remote in New Tab" style="background: linear-gradient(135deg, #ff2e93, #7928ca); padding: 4px 8px; font-size: 10px;">🌐 Open</button>
               </div>
-              <div id="popupRemoteIpChips" style="display:none; gap:5px; flex-wrap:wrap; margin-top: 4px;"></div>
-              <div id="popupRemoteQrContainer" style="text-align: center; margin-top: 6px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">
-                <div id="popupRemoteQrBox" style="width: 120px; height: 120px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
-                <div style="font-size: 10px; color: #a09bb8; margin-top: 5px;">📷 Scan QR with phone camera to open</div>
-              </div>
+            </div>
+
+            <div id="popupCloudQrContainer" style="text-align: center; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">
+              <div id="popupCloudQrBox" style="width: 120px; height: 120px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy link"></div>
+              <div style="font-size: 10px; color: #a09bb8; margin-top: 5px;">📷 Scan QR with phone camera to connect</div>
             </div>
           </div>
 
-          <!-- OFFLINE VIEW (Shown when server is not detected) -->
-          <div id="popupRemoteOfflineView" style="display: flex; flex-direction: column; gap: 6px;">
-            <div style="font-size: 10px; color: #ddd; line-height: 1.4;">
-              💡 <strong>Start the local server</strong> on your computer to use Phone Remote:
+          <!-- LOCAL SERVER VIEW -->
+          <div id="popupLocalServerView" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+            <!-- ONLINE VIEW (Shown when server is running) -->
+            <div id="popupRemoteOnlineView" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+              <div class="popup-nas-input-group">
+                <label style="font-size: 10px; color: var(--text-secondary); display: flex; justify-content: space-between;">
+                  <span>Local Server URL:</span>
+                  <span style="color: #00ffaa; font-size: 9px;">Ready to connect</span>
+                </label>
+                <div class="popup-nas-input-row" style="display: flex; gap: 6px;">
+                  <input type="text" id="popupRemoteUrlInput" class="popup-nas-input" readonly value="http://127.0.0.1:3000/remote" style="font-size: 11px; flex: 1;">
+                  <button type="button" id="btnPopupCopyRemoteUrl" class="btn-popup-test" title="Copy Remote URL" style="padding: 4px 8px; font-size: 10px;">📋 Copy</button>
+                  <button type="button" id="btnPopupOpenRemoteTab" class="btn-popup-test" title="Open Remote Web Interface in New Tab" style="background: linear-gradient(135deg, #ff2e93, #7928ca); padding: 4px 8px; font-size: 10px;">🌐 Open</button>
+                </div>
+                <div id="popupRemoteIpChips" style="display:none; gap:5px; flex-wrap:wrap; margin-top: 4px;"></div>
+                <div id="popupRemoteQrContainer" style="text-align: center; margin-top: 6px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">
+                  <div id="popupRemoteQrBox" style="width: 120px; height: 120px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
+                  <div style="font-size: 10px; color: #a09bb8; margin-top: 5px;">📷 Scan QR with phone camera to open</div>
+                </div>
+              </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 6px; background: #12101f; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
-              <code id="popupServerCmdText" style="flex: 1; font-size: 10px; color: #00ffaa; font-family: monospace; overflow-x: auto; white-space: nowrap;">./start-phone-remote.sh</code>
-              <button type="button" id="btnPopupCopyServerCmd" class="btn-popup-test" style="font-size: 9px; padding: 3px 6px;">📋 Copy</button>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
-              <span style="font-size: 9px; color: #888;">Windows: double-click <code>start-phone-remote.bat</code></span>
-              <button type="button" id="btnPopupRetryRemote" class="btn-vol-reset" style="font-size: 9px; padding: 2px 8px;">🔄 Check</button>
+
+            <!-- OFFLINE VIEW (Shown when server is not detected) -->
+            <div id="popupRemoteOfflineView" style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="font-size: 10px; color: #ddd; line-height: 1.4;">
+                💡 <strong>Start the local server</strong> on your computer to use Local Remote:
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; background: #12101f; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
+                <code id="popupServerCmdText" style="flex: 1; font-size: 10px; color: #00ffaa; font-family: monospace; overflow-x: auto; white-space: nowrap;">./start-phone-remote.sh</code>
+                <button type="button" id="btnPopupCopyServerCmd" class="btn-popup-test" style="font-size: 9px; padding: 3px 6px;">📋 Copy</button>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                <span style="font-size: 9px; color: #888;">Windows: double-click <code>start-phone-remote.bat</code></span>
+                <button type="button" id="btnPopupRetryRemote" class="btn-vol-reset" style="font-size: 9px; padding: 2px 8px;">🔄 Check</button>
+              </div>
             </div>
           </div>
         </div>

@@ -89,6 +89,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnPopupRetryRemote = document.getElementById("btnPopupRetryRemote");
   const popupServerCmdText = document.getElementById("popupServerCmdText");
 
+  const btnTabCloudRemote = document.getElementById("btnTabCloudRemote");
+  const btnTabLocalRemote = document.getElementById("btnTabLocalRemote");
+  const popupCloudRoomView = document.getElementById("popupCloudRoomView");
+  const popupLocalServerView = document.getElementById("popupLocalServerView");
+  const popupCloudRoomCodeText = document.getElementById("popupCloudRoomCodeText");
+  const btnPopupCopyRoomCode = document.getElementById("btnPopupCopyRoomCode");
+  const btnPopupRegenRoomCode = document.getElementById("btnPopupRegenRoomCode");
+  const popupCloudRemoteUrlInput = document.getElementById("popupCloudRemoteUrlInput");
+  const btnPopupCopyCloudUrl = document.getElementById("btnPopupCopyCloudUrl");
+  const btnPopupOpenCloudTab = document.getElementById("btnPopupOpenCloudTab");
+  const popupCloudQrBox = document.getElementById("popupCloudQrBox");
+  const popupCloudQrContainer = document.getElementById("popupCloudQrContainer");
+
   const btnInstantRadio = document.getElementById("btnInstantRadio");
   const gachaSearchInput = document.getElementById("gachaSearchInput");
   const btnSearch = document.getElementById("btnSearch");
@@ -212,9 +225,54 @@ document.addEventListener("DOMContentLoaded", async () => {
       toggleRemoteServer.checked = settings.remoteServerEnabled !== false;
       if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", settings.remoteServerEnabled === false);
     }
+    initPopupCloudRoom();
     discoverAndSetRemoteUrl();
   } catch (err) {
     console.error("[Gacha MV] Failed to load settings:", err);
+  }
+
+  let activeCloudRoomCode = "";
+
+  function generatePopupRoomCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let res = "GCMV-";
+    for (let i = 0; i < 4; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return res;
+  }
+
+  function renderCloudQrCode(url) {
+    if (!popupCloudQrBox || !url) return;
+    try {
+      if (typeof qrcode === "function") {
+        const qr = qrcode(0, "M");
+        qr.addData(url);
+        qr.make();
+        popupCloudQrBox.innerHTML = qr.createSvgTag({ scalable: true });
+        if (popupCloudQrContainer) popupCloudQrContainer.classList.remove("hidden");
+      }
+    } catch (e) {
+      console.warn("[GCMV] QR render error:", e);
+    }
+  }
+
+  async function initPopupCloudRoom() {
+    const stored = await extStorage.get({ cloudRoomCode: "" });
+    activeCloudRoomCode = stored.cloudRoomCode || generatePopupRoomCode();
+    if (!stored.cloudRoomCode) {
+      await extStorage.set({ cloudRoomCode: activeCloudRoomCode });
+    }
+
+    if (popupCloudRoomCodeText) {
+      popupCloudRoomCodeText.textContent = activeCloudRoomCode;
+    }
+
+    const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${activeCloudRoomCode}`;
+    if (popupCloudRemoteUrlInput) {
+      popupCloudRemoteUrlInput.value = cloudUrl;
+    }
+    renderCloudQrCode(cloudUrl);
   }
 
   const popupRemoteQrBox = document.getElementById("popupRemoteQrBox");
@@ -570,6 +628,86 @@ document.addEventListener("DOMContentLoaded", async () => {
             const orig = btnPopupCopyRemoteUrl.textContent;
             btnPopupCopyRemoteUrl.textContent = "Copied!";
             setTimeout(() => { btnPopupCopyRemoteUrl.textContent = orig; }, 1500);
+          }
+        }).catch(() => {});
+      }
+    });
+  }
+
+  // Cloud Room (Zero-Script) Event Listeners
+  if (btnTabCloudRemote && btnTabLocalRemote) {
+    btnTabCloudRemote.addEventListener("click", () => {
+      btnTabCloudRemote.classList.add("active");
+      btnTabLocalRemote.classList.remove("active");
+      if (popupCloudRoomView) popupCloudRoomView.classList.remove("hidden");
+      if (popupLocalServerView) popupLocalServerView.classList.add("hidden");
+      if (popupRemoteStatusBadge) {
+        popupRemoteStatusBadge.style.background = "rgba(0, 255, 170, 0.15)";
+        popupRemoteStatusBadge.style.color = "#00ffaa";
+        popupRemoteStatusBadge.style.border = "1px solid rgba(0, 255, 170, 0.3)";
+      }
+      if (popupRemoteStatusText) popupRemoteStatusText.textContent = "CLOUD READY";
+    });
+
+    btnTabLocalRemote.addEventListener("click", () => {
+      btnTabLocalRemote.classList.add("active");
+      btnTabCloudRemote.classList.remove("active");
+      if (popupCloudRoomView) popupCloudRoomView.classList.add("hidden");
+      if (popupLocalServerView) popupLocalServerView.classList.remove("hidden");
+      discoverAndSetRemoteUrl();
+    });
+  }
+
+  if (btnPopupCopyRoomCode) {
+    btnPopupCopyRoomCode.addEventListener("click", () => {
+      if (activeCloudRoomCode) {
+        navigator.clipboard.writeText(activeCloudRoomCode).then(() => {
+          const orig = btnPopupCopyRoomCode.textContent;
+          btnPopupCopyRoomCode.textContent = "Copied!";
+          setTimeout(() => { btnPopupCopyRoomCode.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
+    });
+  }
+
+  if (btnPopupRegenRoomCode) {
+    btnPopupRegenRoomCode.addEventListener("click", async () => {
+      activeCloudRoomCode = generatePopupRoomCode();
+      await extStorage.set({ cloudRoomCode: activeCloudRoomCode });
+      if (popupCloudRoomCodeText) popupCloudRoomCodeText.textContent = activeCloudRoomCode;
+      const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${activeCloudRoomCode}`;
+      if (popupCloudRemoteUrlInput) popupCloudRemoteUrlInput.value = cloudUrl;
+      renderCloudQrCode(cloudUrl);
+    });
+  }
+
+  if (btnPopupCopyCloudUrl) {
+    btnPopupCopyCloudUrl.addEventListener("click", () => {
+      if (popupCloudRemoteUrlInput && popupCloudRemoteUrlInput.value) {
+        navigator.clipboard.writeText(popupCloudRemoteUrlInput.value).then(() => {
+          const orig = btnPopupCopyCloudUrl.textContent;
+          btnPopupCopyCloudUrl.textContent = "Copied!";
+          setTimeout(() => { btnPopupCopyCloudUrl.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
+    });
+  }
+
+  if (btnPopupOpenCloudTab) {
+    btnPopupOpenCloudTab.addEventListener("click", () => {
+      const url = chrome.runtime.getURL("remote/index.html?room=" + activeCloudRoomCode);
+      chrome.tabs.create({ url });
+    });
+  }
+
+  if (popupCloudQrBox) {
+    popupCloudQrBox.addEventListener("click", () => {
+      if (popupCloudRemoteUrlInput && popupCloudRemoteUrlInput.value) {
+        navigator.clipboard.writeText(popupCloudRemoteUrlInput.value).then(() => {
+          if (btnPopupCopyCloudUrl) {
+            const orig = btnPopupCopyCloudUrl.textContent;
+            btnPopupCopyCloudUrl.textContent = "Copied!";
+            setTimeout(() => { btnPopupCopyCloudUrl.textContent = orig; }, 1500);
           }
         }).catch(() => {});
       }
