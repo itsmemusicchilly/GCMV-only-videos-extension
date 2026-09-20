@@ -430,7 +430,7 @@ def get_web_remote_html(pin_required):
           if (po) po.style.display = 'flex';
         }}
         return await r.json();
-      }} catch (e) {{ return null; }}
+      }} catch (e) {{ return {{ success: false, error: e.message || 'Network error' }}; }}
     }}
 
     async function refreshStatus() {{

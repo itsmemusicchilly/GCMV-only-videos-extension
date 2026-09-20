@@ -18,6 +18,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -529,12 +530,16 @@ public class RemoteServerManager {
         return queue;
     }
 
-    public String getQueueJson() {
+    public JSONArray getQueueArray() {
         JSONArray arr = new JSONArray();
         for (QueueItem item : queue) {
             arr.put(item.toJson());
         }
-        return arr.toString();
+        return arr;
+    }
+
+    public String getQueueJson() {
+        return getQueueArray().toString();
     }
 
     public synchronized QueueItem popNextQueuedVideo() {
@@ -610,8 +615,8 @@ public class RemoteServerManager {
             return s;
         }
 
-        // 2. youtu.be/<id>
-        Pattern p1 = Pattern.compile("(?:youtu\\.be/|youtube\\.com/(?:embed/|v/|shorts/|watch\\?v=|watch\\?.+&v=))([a-zA-Z0-9_-]{11})");
+        // 2. youtu.be/<id> or youtube.com urls
+        Pattern p1 = Pattern.compile("(?:youtu\\.be/|youtube\\.com/(?:embed/|v/|shorts/|live/|watch\\?v=|watch\\?.+&v=))([a-zA-Z0-9_-]{11})");
         Matcher m1 = p1.matcher(s);
         if (m1.find()) {
             return m1.group(1);
@@ -621,7 +626,7 @@ public class RemoteServerManager {
 
     private void handleClient(Socket socket) {
         try {
-            socket.setSoTimeout(5000);
+            socket.setSoTimeout(6000);
             BufferedInputStream bin = new BufferedInputStream(socket.getInputStream());
             bin.mark(4);
             int firstByte = bin.read();
@@ -633,201 +638,223 @@ public class RemoteServerManager {
             bin.reset();
 
             try (OutputStream out = socket.getOutputStream()) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(bin, StandardCharsets.UTF_8));
-                String requestLine = reader.readLine();
-                if (requestLine == null) return;
-
-            String[] parts = requestLine.split(" ");
-            if (parts.length < 2) return;
-
-            String method = parts[0].toUpperCase();
-            String fullPath = parts[1];
-
-            // Read headers
-            String line;
-            int contentLength = 0;
-            String authHeader = "";
-            while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                String lower = line.toLowerCase();
-                if (lower.startsWith("content-length:")) {
-                    try {
-                        contentLength = Integer.parseInt(line.substring(15).trim());
-                    } catch (Exception ignored) {}
-                } else if (lower.startsWith("authorization:")) {
-                    authHeader = line.substring(14).trim();
-                } else if (lower.startsWith("x-gcmv-pin:")) {
-                    authHeader = line.substring(11).trim();
+                // Read HTTP request headers byte-by-byte up to \r\n\r\n or \n\n
+                ByteArrayOutputStream headerBytes = new ByteArrayOutputStream();
+                int b;
+                int b1 = -1, b2 = -1, b3 = -1, b4 = -1;
+                while ((b = bin.read()) != -1) {
+                    headerBytes.write(b);
+                    b1 = b2;
+                    b2 = b3;
+                    b3 = b4;
+                    b4 = b;
+                    if (b1 == '\r' && b2 == '\n' && b3 == '\r' && b4 == '\n') {
+                        break;
+                    }
+                    if (b3 == '\n' && b4 == '\n') {
+                        break;
+                    }
+                    if (headerBytes.size() > 65536) break; // 64KB safety limit for headers
                 }
-            }
 
-            // Read body if present
-            String body = "";
-            if (contentLength > 0 && contentLength < 1024 * 1024) {
-                char[] buf = new char[contentLength];
-                int read = 0;
-                while (read < contentLength) {
-                    int r = reader.read(buf, read, contentLength - read);
-                    if (r == -1) break;
-                    read += r;
-                }
-                body = new String(buf, 0, read);
-            }
+                if (headerBytes.size() == 0) return;
 
-            // Parse path and query
-            String path = fullPath;
-            String query = "";
-            int qIdx = fullPath.indexOf('?');
-            if (qIdx != -1) {
-                path = fullPath.substring(0, qIdx);
-                query = fullPath.substring(qIdx + 1);
-            }
+                String headerStr = new String(headerBytes.toByteArray(), StandardCharsets.ISO_8859_1);
+                String[] lines = headerStr.split("\r?\n");
+                if (lines.length == 0) return;
 
-            // Check PIN requirement from shared preferences
-            android.content.SharedPreferences sp = context.getSharedPreferences("gacha_prefs", Context.MODE_PRIVATE);
-            boolean pinRequired = sp.getBoolean("remotePinEnabled", false);
-            String configuredPin = sp.getString("remotePin", "1234").trim();
+                String requestLine = lines[0];
+                String[] parts = requestLine.split(" ");
+                if (parts.length < 2) return;
 
-            // Options preflight
-            if ("OPTIONS".equals(method)) {
-                sendResponse(out, 204, "text/plain", "");
-                return;
-            }
+                String method = parts[0].toUpperCase(Locale.US);
+                String fullPath = parts[1];
 
-            // API: Check Auth / Status
-            if ("/api/status".equals(path)) {
-                JSONObject res = new JSONObject();
-                res.put("status", "ok");
-                res.put("serverUrl", getServerUrl());
-                res.put("ip", getLocalIpAddress());
-                res.put("port", boundPort);
-                res.put("pinRequired", pinRequired);
-
-                JSONArray addrArr = new JSONArray();
-                for (NetworkAddressInfo nai : getAvailableIpAddresses()) {
-                    addrArr.put(nai.toJson());
-                }
-                res.put("addresses", addrArr);
-
-                res.put("currentVideo", new JSONObject()
-                        .put("videoId", currentVideoId)
-                        .put("title", currentTitle)
-                        .put("isPlaying", isPlaying)
-                        .put("volume", currentVolume));
-                res.put("queue", new JSONArray(getQueueJson()));
-                sendResponse(out, 200, "application/json", res.toString());
-                return;
-            }
-
-            // API: Search YouTube
-            if ("/api/search".equals(path) && "GET".equals(method)) {
-                String q = "";
-                if (!query.isEmpty()) {
-                    for (String param : query.split("&")) {
-                        String[] pair = param.split("=");
-                        if (pair.length >= 2 && "q".equals(pair[0])) {
-                            try {
-                                q = URLDecoder.decode(pair[1], "UTF-8");
-                            } catch (Exception ignored) {}
-                            break;
-                        }
+                // Read headers
+                int contentLength = 0;
+                String authHeader = "";
+                for (int i = 1; i < lines.length; i++) {
+                    String line = lines[i];
+                    String lower = line.toLowerCase(Locale.US);
+                    if (lower.startsWith("content-length:")) {
+                        try {
+                            contentLength = Integer.parseInt(line.substring(15).trim());
+                        } catch (Exception ignored) {}
+                    } else if (lower.startsWith("authorization:")) {
+                        authHeader = line.substring(14).trim();
+                    } else if (lower.startsWith("x-gcmv-pin:")) {
+                        authHeader = line.substring(11).trim();
                     }
                 }
-                String resultsJson = searchYouTube(q);
-                sendResponse(out, 200, "application/json", resultsJson);
-                return;
-            }
 
-            // API: QR Code Image
-            if ("/api/qr".equals(path) || "/qr.png".equals(path)) {
-                String serverUrl = getServerUrl();
-                byte[] qrBytes = QRCodeUtil.generateQrPngBytes(serverUrl, 350, 350);
-                if (qrBytes != null && qrBytes.length > 0) {
-                    sendByteResponse(out, 200, "image/png", qrBytes);
-                } else {
-                    sendResponse(out, 500, "text/plain", "Error generating QR");
+                // Read body: exactly contentLength BYTES, then decode as UTF-8
+                String body = "";
+                if (contentLength > 0 && contentLength < 1024 * 1024) {
+                    byte[] bodyBuf = new byte[contentLength];
+                    int totalRead = 0;
+                    while (totalRead < contentLength) {
+                        int r = bin.read(bodyBuf, totalRead, contentLength - totalRead);
+                        if (r == -1) break;
+                        totalRead += r;
+                    }
+                    body = new String(bodyBuf, 0, totalRead, StandardCharsets.UTF_8);
                 }
-                return;
-            }
 
-            if ("/api/auth".equals(path) && "POST".equals(method)) {
-                JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
-                String clientPin = json.optString("pin", "").trim();
-                boolean valid = !pinRequired || configuredPin.equals(clientPin);
-                JSONObject res = new JSONObject();
-                res.put("success", valid);
-                res.put("pinRequired", pinRequired);
-                sendResponse(out, valid ? 200 : 401, "application/json", res.toString());
-                return;
-            }
-
-            // Protected API calls: check PIN if enabled
-            if (pinRequired && path.startsWith("/api/")) {
-                boolean authorized = false;
-                if (!authHeader.isEmpty()) {
-                    String supplied = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
-                    if (configuredPin.equals(supplied.trim())) authorized = true;
+                // Parse path and query
+                String path = fullPath;
+                String query = "";
+                int qIdx = fullPath.indexOf('?');
+                if (qIdx != -1) {
+                    path = fullPath.substring(0, qIdx);
+                    query = fullPath.substring(qIdx + 1);
                 }
-                if (!authorized && !body.isEmpty()) {
-                    try {
-                        JSONObject bJson = new JSONObject(body);
-                        if (configuredPin.equals(bJson.optString("pin", "").trim())) authorized = true;
-                    } catch (Exception ignored) {}
-                }
-                if (!authorized) {
-                    sendResponse(out, 401, "application/json", "{\"error\":\"PIN required\"}");
-                    return;
-                }
-            }
 
-            // API: Add to Queue
-            if ("/api/queue".equals(path) && "POST".equals(method)) {
-                JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
-                String urlOrId = json.optString("url", "").trim();
-                String title = json.optString("title", "").trim();
-                String action = json.optString("action", "add_queue").trim(); // play_now, play_next, add_queue
+                // Check PIN requirement from shared preferences
+                android.content.SharedPreferences sp = context.getSharedPreferences("gacha_prefs", Context.MODE_PRIVATE);
+                boolean pinRequired = sp.getBoolean("remotePinEnabled", false);
+                String configuredPin = sp.getString("remotePin", "1234").trim();
 
-                if (urlOrId.isEmpty()) {
-                    sendResponse(out, 400, "application/json", "{\"error\":\"Missing 'url' field\"}");
+                // Options preflight
+                if ("OPTIONS".equals(method)) {
+                    sendResponse(out, 204, "text/plain", "");
                     return;
                 }
 
-                QueueItem item = addVideoToQueue(urlOrId, title.isEmpty() ? null : title, action);
-                if (item == null) {
-                    sendResponse(out, 400, "application/json", "{\"error\":\"Could not extract valid YouTube video ID\"}");
+                // API: Check Auth / Status
+                if ("/api/status".equals(path)) {
+                    JSONObject res = new JSONObject();
+                    res.put("status", "ok");
+                    res.put("serverUrl", getServerUrl());
+                    res.put("ip", getLocalIpAddress());
+                    res.put("port", boundPort);
+                    res.put("pinRequired", pinRequired);
+
+                    JSONArray addrArr = new JSONArray();
+                    for (NetworkAddressInfo nai : getAvailableIpAddresses()) {
+                        addrArr.put(nai.toJson());
+                    }
+                    res.put("addresses", addrArr);
+
+                    res.put("currentVideo", new JSONObject()
+                            .put("videoId", currentVideoId)
+                            .put("title", currentTitle)
+                            .put("isPlaying", isPlaying)
+                            .put("volume", currentVolume));
+                    res.put("queue", getQueueArray());
+                    sendResponse(out, 200, "application/json", res.toString());
                     return;
                 }
 
-                JSONObject res = new JSONObject();
-                res.put("success", true);
-                res.put("item", item.toJson());
-                res.put("action", action);
-                res.put("queue", new JSONArray(getQueueJson()));
-                sendResponse(out, 200, "application/json", res.toString());
-                return;
-            }
-
-            // API: Remove or Clear Queue
-            if ("/api/queue".equals(path) && "DELETE".equals(method)) {
-                String idToRemove = null;
-                if (!query.isEmpty()) {
-                    for (String param : query.split("&")) {
-                        String[] pair = param.split("=");
-                        if (pair.length == 2 && "id".equals(pair[0])) {
-                            idToRemove = URLDecoder.decode(pair[1], "UTF-8");
+                // API: Search YouTube
+                if ("/api/search".equals(path) && "GET".equals(method)) {
+                    String q = "";
+                    if (!query.isEmpty()) {
+                        for (String param : query.split("&")) {
+                            String[] pair = param.split("=");
+                            if (pair.length >= 2 && "q".equals(pair[0])) {
+                                try {
+                                    q = URLDecoder.decode(pair[1], "UTF-8");
+                                } catch (Exception ignored) {}
+                                break;
+                            }
                         }
                     }
+                    String resultsJson = searchYouTube(q);
+                    sendResponse(out, 200, "application/json", resultsJson);
+                    return;
                 }
-                if (idToRemove != null && !idToRemove.isEmpty()) {
-                    removeQueueItem(idToRemove);
-                } else {
-                    clearQueue();
+
+                // API: QR Code Image
+                if ("/api/qr".equals(path) || "/qr.png".equals(path)) {
+                    String serverUrl = getServerUrl();
+                    byte[] qrBytes = QRCodeUtil.generateQrPngBytes(serverUrl, 350, 350);
+                    if (qrBytes != null && qrBytes.length > 0) {
+                        sendByteResponse(out, 200, "image/png", qrBytes);
+                    } else {
+                        sendResponse(out, 500, "text/plain", "Error generating QR");
+                    }
+                    return;
                 }
-                JSONObject res = new JSONObject();
-                res.put("success", true);
-                res.put("queue", new JSONArray(getQueueJson()));
-                sendResponse(out, 200, "application/json", res.toString());
-                return;
-            }
+
+                if ("/api/auth".equals(path) && "POST".equals(method)) {
+                    JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
+                    String clientPin = json.optString("pin", "").trim();
+                    boolean valid = !pinRequired || configuredPin.equals(clientPin);
+                    JSONObject res = new JSONObject();
+                    res.put("success", valid);
+                    res.put("pinRequired", pinRequired);
+                    sendResponse(out, valid ? 200 : 401, "application/json", res.toString());
+                    return;
+                }
+
+                // Protected API calls: check PIN if enabled
+                if (pinRequired && path.startsWith("/api/")) {
+                    boolean authorized = false;
+                    if (!authHeader.isEmpty()) {
+                        String supplied = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+                        if (configuredPin.equals(supplied.trim())) authorized = true;
+                    }
+                    if (!authorized && !body.isEmpty()) {
+                        try {
+                            JSONObject bJson = new JSONObject(body);
+                            if (configuredPin.equals(bJson.optString("pin", "").trim())) authorized = true;
+                        } catch (Exception ignored) {}
+                    }
+                    if (!authorized) {
+                        sendResponse(out, 401, "application/json", "{\"error\":\"PIN required\"}");
+                        return;
+                    }
+                }
+
+                // API: Add to Queue
+                if ("/api/queue".equals(path) && "POST".equals(method)) {
+                    JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
+                    String urlOrId = json.optString("url", "").trim();
+                    String title = json.optString("title", "").trim();
+                    String action = json.optString("action", "add_queue").trim(); // play_now, play_next, add_queue
+
+                    if (urlOrId.isEmpty()) {
+                        sendResponse(out, 400, "application/json", "{\"error\":\"Missing 'url' field\"}");
+                        return;
+                    }
+
+                    QueueItem item = addVideoToQueue(urlOrId, title.isEmpty() ? null : title, action);
+                    if (item == null) {
+                        sendResponse(out, 400, "application/json", "{\"error\":\"Could not extract valid YouTube video ID\"}");
+                        return;
+                    }
+
+                    JSONObject res = new JSONObject();
+                    res.put("success", true);
+                    res.put("item", item.toJson());
+                    res.put("action", action);
+                    res.put("queue", getQueueArray());
+                    sendResponse(out, 200, "application/json", res.toString());
+                    return;
+                }
+
+                // API: Remove or Clear Queue
+                if ("/api/queue".equals(path) && "DELETE".equals(method)) {
+                    String idToRemove = null;
+                    if (!query.isEmpty()) {
+                        for (String param : query.split("&")) {
+                            String[] pair = param.split("=");
+                            if (pair.length == 2 && "id".equals(pair[0])) {
+                                idToRemove = URLDecoder.decode(pair[1], "UTF-8");
+                            }
+                        }
+                    }
+                    if (idToRemove != null && !idToRemove.isEmpty()) {
+                        removeQueueItem(idToRemove);
+                    } else {
+                        clearQueue();
+                    }
+                    JSONObject res = new JSONObject();
+                    res.put("success", true);
+                    res.put("queue", getQueueArray());
+                    sendResponse(out, 200, "application/json", res.toString());
+                    return;
+                }
 
             // API: Playback Control
             if ("/api/control".equals(path) && "POST".equals(method)) {
@@ -1065,7 +1092,7 @@ public class RemoteServerManager {
                 "          if (po) po.style.display = 'flex';\n" +
                 "        }\n" +
                 "        return await r.json();\n" +
-                "      } catch (e) { return null; }\n" +
+                "      } catch (e) { return { success: false, error: e.message || 'Network error' }; }\n" +
                 "    }\n" +
                 "\n" +
                 "    async function refreshStatus() {\n" +
