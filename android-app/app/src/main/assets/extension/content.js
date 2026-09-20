@@ -2505,8 +2505,7 @@
                 }
               }, 1000);
             } else if (item.action === "play_now" && item.videoId) {
-              showToast("📱 Remote: Playing ➔ " + (item.title || item.videoId) + " 🌸");
-              window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
+              navigateToVideo(item.videoId, item.title);
             } else if (item.action === "volume" && video && typeof item.value === "number") {
               video.volume = Math.max(0, Math.min(100, item.value)) / 100;
             }
@@ -2987,6 +2986,37 @@
   }
 
   window.__gachaRestoreFullscreen = checkAndRestoreFullscreen;
+
+  function navigateToVideo(videoId, title) {
+    if (!videoId) return;
+    saveFullscreenStateBeforeNavigate();
+    recordRecentPlayedVideoId(videoId);
+
+    // 1. Try desktop YouTube movie_player SPA navigation (preserves fullscreen seamlessly without reload)
+    try {
+      const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+      if (moviePlayer && typeof moviePlayer.loadVideoById === "function") {
+        moviePlayer.loadVideoById(videoId);
+        try {
+          window.history.pushState(null, "", "/watch?v=" + videoId);
+          window.dispatchEvent(new CustomEvent("yt-navigate-finish"));
+        } catch (e) {}
+        if (title) showToast("▶️ Playing: " + title + " 🌸");
+        return;
+      }
+    } catch (e) {}
+
+    // 2. AndroidBridge native navigation
+    if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+      window.AndroidBridge.loadUrl("https://m.youtube.com/watch?v=" + videoId);
+      return;
+    }
+
+    // 3. Fallback to location.href
+    window.location.href = "https://" + window.location.host + "/watch?v=" + videoId;
+  }
+
+  window.__gachaPlayNow = navigateToVideo;
 
   function handleFullscreenState() {
     const isPlayerFull = isPlayerMediaFullscreen();
@@ -4209,7 +4239,7 @@
             if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
               window.AndroidBridge.removeQueueItem(qId);
             }
-            window.location.href = "/watch?v=" + vid;
+            navigateToVideo(vid);
           };
         });
 
@@ -5238,9 +5268,7 @@
           const item = JSON.parse(queuedJson);
           if (item && item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
-            recordRecentPlayedVideoId(item.videoId);
-            saveFullscreenStateBeforeNavigate();
-            window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
+            navigateToVideo(item.videoId, item.title);
             return;
           }
         }
@@ -5258,9 +5286,7 @@
           const data = await res.json();
           if (data && data.item && data.item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
-            recordRecentPlayedVideoId(data.item.videoId);
-            saveFullscreenStateBeforeNavigate();
-            window.location.href = "https://" + window.location.host + "/watch?v=" + data.item.videoId;
+            navigateToVideo(data.item.videoId, data.item.title);
             return;
           }
         }
@@ -5439,9 +5465,7 @@
         }
         const picked = pool[Math.floor(Math.random() * pool.length)];
         showToast("🌸 Gacha Autoplay: Up next ➔ " + picked.title);
-        recordRecentPlayedVideoId(picked.id);
-        saveFullscreenStateBeforeNavigate();
-        window.location.href = "https://" + window.location.host + "/watch?v=" + picked.id;
+        navigateToVideo(picked.id, picked.title);
       } catch (err) {
         console.warn("[GCMV] Error in playCuratedFallback:", err);
       }
