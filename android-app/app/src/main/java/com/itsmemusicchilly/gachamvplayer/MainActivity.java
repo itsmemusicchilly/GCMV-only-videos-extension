@@ -79,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
 
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
+    private boolean wasFullscreenBeforeNavigate = false;
 
     private String polyfillJs = "";
     private String contentCss = "";
@@ -123,6 +124,9 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPlayNow(String videoId, String title) {
                 if (webView != null) {
+                    if (customView != null) {
+                        wasFullscreenBeforeNavigate = true;
+                    }
                     webView.loadUrl("https://m.youtube.com/watch?v=" + videoId);
                 }
             }
@@ -138,7 +142,10 @@ public class MainActivity extends AppCompatActivity {
                         webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
                         break;
                     case "next":
-                        webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('remote_skip'); } else { var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next, .icon-button.player-control-next'); if(btn) btn.click(); } })()", null);
+                        if (customView != null) {
+                            wasFullscreenBeforeNavigate = true;
+                        }
+                        webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('remote_skip'); } else { var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next, .icon-button.player-control-next, ytm-next-button'); if(btn) btn.click(); } })()", null);
                         break;
                     case "volume":
                         if (value instanceof Number) {
@@ -1252,6 +1259,23 @@ public class MainActivity extends AppCompatActivity {
                 }
             }, d);
         }
+
+        if (wasFullscreenBeforeNavigate) {
+            wasFullscreenBeforeNavigate = false;
+            view.evaluateJavascript(
+                "(function(){\n" +
+                "  try { sessionStorage.setItem('gcmv_restore_fullscreen', 'true'); } catch(e){}\n" +
+                "  var attempts = 0;\n" +
+                "  var t = setInterval(function(){\n" +
+                "    attempts++;\n" +
+                "    var btn = document.querySelector('.fullscreen-icon, button.fullscreen-icon, button[aria-label=\"Full screen\"], button[aria-label=\"fullscreen\"], .ytp-fullscreen-button, .player-control-fullscreen');\n" +
+                "    var v = document.querySelector('video');\n" +
+                "    if (btn && typeof btn.click === 'function') { btn.click(); clearInterval(t); }\n" +
+                "    else if (v && v.requestFullscreen) { v.requestFullscreen().catch(function(){}); clearInterval(t); }\n" +
+                "    else if (attempts > 30) { clearInterval(t); }\n" +
+                "  }, 350);\n" +
+                "})()", null);
+        }
     }
 
     private void setupBackNavigation() {
@@ -1343,6 +1367,11 @@ public class MainActivity extends AppCompatActivity {
      * Native JavaScript Interface Bridge
      */
     public class AndroidBridge {
+        @JavascriptInterface
+        public boolean isFullscreen() {
+            return customView != null;
+        }
+
         @JavascriptInterface
         public void loadUrl(String url) {
             mainHandler.post(() -> {

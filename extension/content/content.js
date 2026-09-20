@@ -2842,6 +2842,7 @@
     if (isWatch) {
       setupVideoPlayerListeners();
       ensureYoutubeAutoplayToggleOn();
+      checkAndRestoreFullscreen();
 
       if (videoId) {
         if (activeSegmentVideoId !== videoId) {
@@ -2890,7 +2891,54 @@
       return true;
     }
 
+    // 4. Check Android Bridge custom view
+    if (window.AndroidBridge && typeof window.AndroidBridge.isFullscreen === "function") {
+      try {
+        if (window.AndroidBridge.isFullscreen()) return true;
+      } catch (e) {}
+    }
+
     return false;
+  }
+
+  function saveFullscreenStateBeforeNavigate() {
+    try {
+      if (isPlayerMediaFullscreen()) {
+        sessionStorage.setItem("gcmv_restore_fullscreen", "true");
+      }
+    } catch (e) {}
+  }
+
+  function checkAndRestoreFullscreen() {
+    try {
+      if (sessionStorage.getItem("gcmv_restore_fullscreen") !== "true") return;
+
+      let attempts = 0;
+      const interval = setInterval(() => {
+        attempts++;
+        if (isPlayerMediaFullscreen()) {
+          sessionStorage.removeItem("gcmv_restore_fullscreen");
+          clearInterval(interval);
+          return;
+        }
+
+        const fsBtn = document.querySelector(
+          ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, button[data-title-no-tooltip='Full screen'], .icon-button.player-control-fullscreen"
+        );
+        const video = document.querySelector("video");
+
+        if (fsBtn && typeof fsBtn.click === "function") {
+          fsBtn.click();
+        } else if (video && typeof video.requestFullscreen === "function") {
+          video.requestFullscreen().catch(() => {});
+        }
+
+        if (attempts > 30) {
+          clearInterval(interval);
+          sessionStorage.removeItem("gcmv_restore_fullscreen");
+        }
+      }, 350);
+    } catch (e) {}
   }
 
   function handleFullscreenState() {
@@ -5129,8 +5177,9 @@
     }
   }
 
-  async function checkAndEnforceGachaNext() {
-    if (!settings.enabled || !settings.autoplayGuard) return;
+  async function checkAndEnforceGachaNext(triggerSource = "autoplay_guard") {
+    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip";
+    if (!settings.enabled || (!settings.autoplayGuard && !isExplicitSkip)) return;
 
     ensureYoutubeAutoplayToggleOn();
 
@@ -5143,6 +5192,7 @@
           if (item && item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
             recordRecentPlayedVideoId(item.videoId);
+            saveFullscreenStateBeforeNavigate();
             window.location.href = "https://" + window.location.host + "/watch?v=" + item.videoId;
             return;
           }
@@ -5162,6 +5212,7 @@
           if (data && data.item && data.item.videoId) {
             showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
             recordRecentPlayedVideoId(data.item.videoId);
+            saveFullscreenStateBeforeNavigate();
             window.location.href = "https://" + window.location.host + "/watch?v=" + data.item.videoId;
             return;
           }
@@ -5174,8 +5225,6 @@
     const isMix =
       window.location.search.includes("list=") ||
       Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
-
-    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip";
 
     // If in a mix/playlist, check if the next video is non-Gacha and needs skipping
     if (isMix) {
@@ -5206,6 +5255,7 @@
           if (nextIndex < playlistItems.length) {
             const nextEl = playlistItems[nextIndex].querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || playlistItems[nextIndex];
             showToast("⏭️ Skipping to next playlist track... 🌸");
+            saveFullscreenStateBeforeNavigate();
             if (typeof nextEl.click === "function") nextEl.click();
             else if (nextEl.href) window.location.href = nextEl.href;
             return;
@@ -5216,6 +5266,7 @@
       const skipTargetInMix = findNextNonGachaSkipTargetInMix(currentVideoId);
       if (skipTargetInMix && skipTargetInMix.element) {
         showToast("🛡️ Mix Guard: Skipping non-Gacha track ➔ " + skipTargetInMix.title.substring(0, 25) + "... 🌸");
+        saveFullscreenStateBeforeNavigate();
         skipTargetInMix.element.click();
         return;
       }
@@ -5260,6 +5311,7 @@
         if (isExplicitSkip) {
           showToast("🌸 Skipping ➔ " + firstTitle.substring(0, 30) + "... ✨");
           if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
+          saveFullscreenStateBeforeNavigate();
           if (firstLink && typeof firstLink.click === "function") {
             firstLink.click();
           } else if (firstVideoId) {
@@ -5275,6 +5327,7 @@
           const vid = document.querySelector("video.html5-main-video") || document.querySelector("video");
           const nowVid = getCurrentVideoId();
           if (nowVid === currentVideoId && (vid?.ended || vid?.paused)) {
+            saveFullscreenStateBeforeNavigate();
             if (firstLink && typeof firstLink.click === "function") {
               firstLink.click();
             } else if (firstVideoId) {
@@ -5308,6 +5361,7 @@
             foundGacha = true;
             showToast("🌸 Skipping ➔ " + title.substring(0, 30) + "... ✨");
             if (recVideoId) recordRecentPlayedVideoId(recVideoId);
+            saveFullscreenStateBeforeNavigate();
             if (typeof link.click === "function") {
               link.click();
             } else {
@@ -5339,6 +5393,7 @@
         const picked = pool[Math.floor(Math.random() * pool.length)];
         showToast("🌸 Gacha Autoplay: Up next ➔ " + picked.title);
         recordRecentPlayedVideoId(picked.id);
+        saveFullscreenStateBeforeNavigate();
         window.location.href = "https://" + window.location.host + "/watch?v=" + picked.id;
       } catch (err) {
         console.warn("[GCMV] Error in playCuratedFallback:", err);
