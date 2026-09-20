@@ -184,6 +184,8 @@
       activeRoomCode = cleanCode;
       localStorage.setItem("gcmv_last_room", cleanCode);
       setConnectionBadge("connecting", "CONNECTING...");
+      const hintEl = document.getElementById("roomHint");
+      if (hintEl) hintEl.innerHTML = `Connecting to Room <strong>${cleanCode}</strong>...`;
 
       if (peer) {
         try { peer.destroy(); } catch (_) {}
@@ -200,6 +202,7 @@
           document.getElementById("mainControlsView").classList.remove("hidden");
           document.getElementById("activeRoomTag").textContent = `Room: ${cleanCode}`;
           document.getElementById("inputRoomCode").value = cleanCode;
+          if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}!</span>`;
           showToast(`🟢 Connected to Room ${cleanCode}!`);
           // Request initial playback state
           conn.send({ action: "get_state" });
@@ -224,8 +227,21 @@
 
       peer.on("error", (err) => {
         console.warn("[GCMV Remote] Peer error:", err);
-        setConnectionBadge("disconnected", "PEER ERROR");
-        showToast("❌ Cloud connection error");
+        if (err && err.type === "peer-unavailable") {
+          setConnectionBadge("disconnected", "PLAYER NOT FOUND");
+          showToast(`⚠️ Room "${cleanCode}" not found. Open YouTube on PC & refresh tab!`);
+          if (hintEl) {
+            hintEl.innerHTML = `
+              <span style="color:#ff5252; font-weight:700;">⚠️ Room "${cleanCode}" is not active.</span><br>
+              1. Open a YouTube video in a tab on your computer.<br>
+              2. <strong>Refresh the YouTube tab (F5)</strong> so the extension connects.<br>
+              3. Verify the Room Code in your extension popup matches <strong>${cleanCode}</strong>.
+            `;
+          }
+        } else {
+          setConnectionBadge("disconnected", "PEER ERROR");
+          showToast("❌ Cloud connection error: " + (err?.type || err?.message || ""));
+        }
       });
     }
 

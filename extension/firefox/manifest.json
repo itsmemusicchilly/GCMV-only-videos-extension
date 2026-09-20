@@ -31,7 +31,7 @@
     "http://*/*",
     "https://*/*"
   ],
-  "content_security_policy": "script-src 'self'; object-src 'self';",
+  "content_security_policy": "script-src 'self'; object-src 'self'; connect-src 'self' https: wss: http:;",
   "background": {
     "scripts": ["background.js"]
   },
