@@ -2914,6 +2914,8 @@
       if (sessionStorage.getItem("gcmv_restore_fullscreen") !== "true") return;
 
       let attempts = 0;
+      let tappedVideo = false;
+
       const interval = setInterval(() => {
         attempts++;
         if (isPlayerMediaFullscreen()) {
@@ -2923,23 +2925,68 @@
         }
 
         const fsBtn = document.querySelector(
-          ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, button[data-title-no-tooltip='Full screen'], .icon-button.player-control-fullscreen"
+          ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, button[data-title-no-tooltip='Full screen'], .icon-button.player-control-fullscreen, [data-button-id='fullscreen']"
         );
         const video = document.querySelector("video");
 
-        if (fsBtn && typeof fsBtn.click === "function") {
-          fsBtn.click();
-        } else if (video && typeof video.requestFullscreen === "function") {
-          video.requestFullscreen().catch(() => {});
+        if (fsBtn) {
+          const rect = fsBtn.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            if (window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
+              window.AndroidBridge.simulateTap(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            }
+            if (typeof fsBtn.click === "function") {
+              fsBtn.click();
+            }
+          } else {
+            // Button exists but zero dimensions (hidden controls). Tap video to wake controls
+            if (!tappedVideo && video) {
+              tappedVideo = true;
+              const vRect = video.getBoundingClientRect();
+              if (vRect.width > 0 && vRect.height > 0 && window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
+                window.AndroidBridge.simulateTap(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
+              }
+            }
+          }
+        } else if (video) {
+          const vRect = video.getBoundingClientRect();
+          if (vRect.width > 0 && vRect.height > 0) {
+            if (!tappedVideo && window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
+              tappedVideo = true;
+              window.AndroidBridge.simulateTap(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
+            }
+            if (typeof video.requestFullscreen === "function") {
+              video.requestFullscreen().catch(() => {});
+            }
+          }
         }
 
-        if (attempts > 30) {
+        if (attempts > 35) {
           clearInterval(interval);
           sessionStorage.removeItem("gcmv_restore_fullscreen");
         }
-      }, 350);
+      }, 300);
+
+      // One-time fallback on user touch/pointer
+      const onUserTouch = () => {
+        if (sessionStorage.getItem("gcmv_restore_fullscreen") === "true") {
+          const btn = document.querySelector(
+            ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, .icon-button.player-control-fullscreen"
+          );
+          const vid = document.querySelector("video");
+          if (btn && typeof btn.click === "function") {
+            btn.click();
+          } else if (vid && typeof vid.requestFullscreen === "function") {
+            vid.requestFullscreen().catch(() => {});
+          }
+        }
+      };
+      window.addEventListener("pointerdown", onUserTouch, { once: true, capture: true });
+      window.addEventListener("touchstart", onUserTouch, { once: true, capture: true });
     } catch (e) {}
   }
+
+  window.__gachaRestoreFullscreen = checkAndRestoreFullscreen;
 
   function handleFullscreenState() {
     const isPlayerFull = isPlayerMediaFullscreen();

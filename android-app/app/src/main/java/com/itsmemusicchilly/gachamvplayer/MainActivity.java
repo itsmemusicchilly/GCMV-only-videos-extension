@@ -11,8 +11,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -1265,15 +1267,9 @@ public class MainActivity extends AppCompatActivity {
             view.evaluateJavascript(
                 "(function(){\n" +
                 "  try { sessionStorage.setItem('gcmv_restore_fullscreen', 'true'); } catch(e){}\n" +
-                "  var attempts = 0;\n" +
-                "  var t = setInterval(function(){\n" +
-                "    attempts++;\n" +
-                "    var btn = document.querySelector('.fullscreen-icon, button.fullscreen-icon, button[aria-label=\"Full screen\"], button[aria-label=\"fullscreen\"], .ytp-fullscreen-button, .player-control-fullscreen');\n" +
-                "    var v = document.querySelector('video');\n" +
-                "    if (btn && typeof btn.click === 'function') { btn.click(); clearInterval(t); }\n" +
-                "    else if (v && v.requestFullscreen) { v.requestFullscreen().catch(function(){}); clearInterval(t); }\n" +
-                "    else if (attempts > 30) { clearInterval(t); }\n" +
-                "  }, 350);\n" +
+                "  if (typeof window.__gachaRestoreFullscreen === 'function') {\n" +
+                "    window.__gachaRestoreFullscreen();\n" +
+                "  }\n" +
                 "})()", null);
         }
     }
@@ -1370,6 +1366,24 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean isFullscreen() {
             return customView != null;
+        }
+
+        @JavascriptInterface
+        public void simulateTap(float cssX, float cssY) {
+            mainHandler.post(() -> {
+                if (webView != null) {
+                    float density = getResources().getDisplayMetrics().density;
+                    float px = cssX * density;
+                    float py = cssY * density;
+                    long now = SystemClock.uptimeMillis();
+                    MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, px, py, 0);
+                    MotionEvent up = MotionEvent.obtain(now, now + 50, MotionEvent.ACTION_UP, px, py, 0);
+                    webView.dispatchTouchEvent(down);
+                    webView.dispatchTouchEvent(up);
+                    down.recycle();
+                    up.recycle();
+                }
+            });
         }
 
         @JavascriptInterface
