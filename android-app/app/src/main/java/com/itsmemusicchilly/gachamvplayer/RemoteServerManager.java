@@ -16,6 +16,7 @@ import java.util.Locale;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -171,14 +172,16 @@ public class RemoteServerManager {
     }
 
     public String getLocalIpAddress() {
-        // 1. Modern Android: ConnectivityManager with active Network and LinkProperties
+        // 1. Modern Android: ConnectivityManager - prioritize Wi-Fi and Ethernet
         try {
             ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    Network activeNetwork = cm.getActiveNetwork();
-                    if (activeNetwork != null) {
-                        LinkProperties lp = cm.getLinkProperties(activeNetwork);
+            if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                // Pass 1: Prioritize Wi-Fi or Ethernet first
+                for (Network net : cm.getAllNetworks()) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                    if (caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                                         caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                        LinkProperties lp = cm.getLinkProperties(net);
                         if (lp != null) {
                             for (LinkAddress la : lp.getLinkAddresses()) {
                                 InetAddress addr = la.getAddress();
@@ -191,22 +194,19 @@ public class RemoteServerManager {
                             }
                         }
                     }
+                }
 
-                    // Check all available networks if activeNetwork didn't yield an IPv4 address
-                    for (Network net : cm.getAllNetworks()) {
-                        NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-                        if (caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                                             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
-                            LinkProperties lp = cm.getLinkProperties(net);
-                            if (lp != null) {
-                                for (LinkAddress la : lp.getLinkAddresses()) {
-                                    InetAddress addr = la.getAddress();
-                                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
-                                        String host = addr.getHostAddress();
-                                        if (host != null && !host.startsWith("127.")) {
-                                            return host;
-                                        }
-                                    }
+                // Pass 2: Active network
+                Network activeNetwork = cm.getActiveNetwork();
+                if (activeNetwork != null) {
+                    LinkProperties lp = cm.getLinkProperties(activeNetwork);
+                    if (lp != null) {
+                        for (LinkAddress la : lp.getLinkAddresses()) {
+                            InetAddress addr = la.getAddress();
+                            if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                String host = addr.getHostAddress();
+                                if (host != null && !host.startsWith("127.")) {
+                                    return host;
                                 }
                             }
                         }
@@ -368,9 +368,21 @@ public class RemoteServerManager {
 
         if (list.isEmpty()) {
             list.add(new NetworkAddressInfo("Localhost", "127.0.0.1", "localhost"));
+        } else {
+            Collections.sort(list, (a, b) -> Integer.compare(getNetworkPriorityScore(a.type), getNetworkPriorityScore(b.type)));
         }
 
         return list;
+    }
+
+    private static int getNetworkPriorityScore(String type) {
+        if ("wifi".equalsIgnoreCase(type)) return 0;
+        if ("ethernet".equalsIgnoreCase(type)) return 1;
+        if ("hotspot".equalsIgnoreCase(type)) return 2;
+        if ("tailscale".equalsIgnoreCase(type)) return 3;
+        if ("vpn".equalsIgnoreCase(type)) return 4;
+        if ("lan".equalsIgnoreCase(type)) return 5;
+        return 6;
     }
 
     private void addNetworkAddress(List<NetworkAddressInfo> list, Set<String> seenIps, String rawName, String ip) {
@@ -420,21 +432,27 @@ public class RemoteServerManager {
                 String line;
                 while ((line = r.readLine()) != null) {
                     sb.append(line).append("\n");
-                    if (sb.length() > 600000) break;
+                    if (sb.length() > 3500000) break;
                 }
             }
 
             String html = sb.toString();
-            Matcher m = Pattern.compile("ytInitialData\\s*=\\s*(\\{.*?\\});", Pattern.DOTALL).matcher(html);
-            if (!m.find()) {
-                m = Pattern.compile("var ytInitialData = (\\{.*?\\});<", Pattern.DOTALL).matcher(html);
-            }
-
-            if (m.find()) {
-                JSONObject json = new JSONObject(m.group(1));
-                JSONArray results = new JSONArray();
-                walkVideoRenderers(json, results, 20);
-                return results.toString();
+            int startIdx = html.indexOf("var ytInitialData = ");
+            if (startIdx == -1) startIdx = html.indexOf("ytInitialData = ");
+            if (startIdx != -1) {
+                int jsonStart = html.indexOf('{', startIdx);
+                int scriptEnd = html.indexOf(";</script>", jsonStart);
+                if (scriptEnd == -1) scriptEnd = html.indexOf("</script>", jsonStart);
+                if (jsonStart != -1 && scriptEnd != -1) {
+                    String rawJson = html.substring(jsonStart, scriptEnd).trim();
+                    if (rawJson.endsWith(";")) {
+                        rawJson = rawJson.substring(0, rawJson.length() - 1).trim();
+                    }
+                    JSONObject json = new JSONObject(rawJson);
+                    JSONArray results = new JSONArray();
+                    walkVideoRenderers(json, results, 20);
+                    return results.toString();
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "searchYouTube error: " + e.getMessage());
@@ -602,12 +620,22 @@ public class RemoteServerManager {
     }
 
     private void handleClient(Socket socket) {
-        try (InputStream in = socket.getInputStream();
-             OutputStream out = socket.getOutputStream()) {
+        try {
+            socket.setSoTimeout(5000);
+            BufferedInputStream bin = new BufferedInputStream(socket.getInputStream());
+            bin.mark(4);
+            int firstByte = bin.read();
+            if (firstByte == 0x16) {
+                // TLS Handshake packet (ClientHello) on plain HTTP port. Close immediately so browser offers HTTP fallback.
+                try { socket.close(); } catch (Exception ignored) {}
+                return;
+            }
+            bin.reset();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
-            String requestLine = reader.readLine();
-            if (requestLine == null) return;
+            try (OutputStream out = socket.getOutputStream()) {
+                BufferedReader reader = new BufferedReader(new InputStreamReader(bin, StandardCharsets.UTF_8));
+                String requestLine = reader.readLine();
+                if (requestLine == null) return;
 
             String[] parts = requestLine.split(" ");
             if (parts.length < 2) return;
@@ -846,6 +874,7 @@ public class RemoteServerManager {
             }
 
             sendResponse(out, 404, "text/plain", "Not Found");
+            }
         } catch (Exception e) {
             Log.e(TAG, "Error handling remote client", e);
         }

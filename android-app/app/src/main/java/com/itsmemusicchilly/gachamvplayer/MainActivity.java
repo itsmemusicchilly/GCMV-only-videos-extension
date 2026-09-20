@@ -138,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
                         webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
                         break;
                     case "next":
-                        webView.evaluateJavascript("(function(){ var oldUrl=window.location.href; var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next'); var clicked=false; if(btn){ btn.click(); clicked=true; } setTimeout(function(){ if(!clicked || window.location.href===oldUrl){ if(typeof window.__gachaSkipVideo==='function') window.__gachaSkipVideo('remote_skip'); else if(typeof window.__gachaPlayNext==='function') window.__gachaPlayNext(); } }, 1000); })()", null);
+                        webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('remote_skip'); } else { var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next, .icon-button.player-control-next'); if(btn) btn.click(); } })()", null);
                         break;
                     case "volume":
                         if (value instanceof Number) {

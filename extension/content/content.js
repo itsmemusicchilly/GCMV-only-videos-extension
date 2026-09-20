@@ -5173,11 +5173,44 @@
       window.location.search.includes("list=") ||
       Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentVideoId = urlParams.get("v") || getCurrentVideoId();
+    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip";
 
     // If in a mix/playlist, check if the next video is non-Gacha and needs skipping
     if (isMix) {
+      if (isExplicitSkip) {
+        // User explicitly tapped Skip: advance to the next item in playlist regardless
+        const playlistItems = document.querySelectorAll(
+          "ytd-playlist-panel-renderer #items ytd-playlist-panel-video-renderer, ytm-playlist-video-renderer, ytm-compact-playlist-video-renderer"
+        );
+        if (playlistItems && playlistItems.length > 0) {
+          const currentVId = currentVideoId || getCurrentVideoId();
+          let currentIndex = -1;
+          for (let i = 0; i < playlistItems.length; i++) {
+            const item = playlistItems[i];
+            const link = item.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a");
+            let itemVid = "";
+            if (link && link.href) {
+              try {
+                const u = new URL(link.href, window.location.origin);
+                itemVid = u.searchParams.get("v") || "";
+              } catch (e) {}
+            }
+            if ((currentVId && itemVid === currentVId) || item.classList.contains("selected") || item.classList.contains("active")) {
+              currentIndex = i;
+              break;
+            }
+          }
+          const nextIndex = currentIndex !== -1 ? currentIndex + 1 : 1;
+          if (nextIndex < playlistItems.length) {
+            const nextEl = playlistItems[nextIndex].querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || playlistItems[nextIndex];
+            showToast("⏭️ Skipping to next playlist track... 🌸");
+            if (typeof nextEl.click === "function") nextEl.click();
+            else if (nextEl.href) window.location.href = nextEl.href;
+            return;
+          }
+        }
+      }
+
       const skipTargetInMix = findNextNonGachaSkipTargetInMix(currentVideoId);
       if (skipTargetInMix && skipTargetInMix.element) {
         showToast("🛡️ Mix Guard: Skipping non-Gacha track ➔ " + skipTargetInMix.title.substring(0, 25) + "... 🌸");
@@ -5186,7 +5219,7 @@
       }
       // If the next track is already Gacha (or playlist end), ensure autoplay toggle is active
       ensureYoutubeAutoplayToggleOn();
-      return;
+      if (!isExplicitSkip) return;
     }
 
     let retryCount = 0;
@@ -5222,6 +5255,17 @@
       const firstChannel = firstChannelEl?.textContent?.trim() || "";
 
       if (isGachaVideo(firstTitle, firstChannel, "", firstVideoId)) {
+        if (isExplicitSkip) {
+          showToast("🌸 Skipping ➔ " + firstTitle.substring(0, 30) + "... ✨");
+          if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
+          if (firstLink && typeof firstLink.click === "function") {
+            firstLink.click();
+          } else if (firstVideoId) {
+            window.location.href = "https://" + window.location.host + "/watch?v=" + firstVideoId;
+          }
+          return;
+        }
+
         showToast("✨ Next up: " + firstTitle.substring(0, 35) + "...");
         if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
         // Guarantee auto-advance: if YouTube doesn't navigate within 1.2s, trigger it
@@ -5257,10 +5301,10 @@
           } catch (e) {}
         }
 
-        if (isGachaVideo(title, channel, "", recVideoId)) {
+        if (recVideoId && recVideoId !== currentVideoId && isGachaVideo(title, channel, "", recVideoId)) {
           if (link && (link.href || typeof link.click === "function")) {
             foundGacha = true;
-            showToast("🛡️ Gacha Guard: Auto-playing " + title.substring(0, 30) + "... 🌸");
+            showToast("🌸 Skipping ➔ " + title.substring(0, 30) + "... ✨");
             if (recVideoId) recordRecentPlayedVideoId(recVideoId);
             if (typeof link.click === "function") {
               link.click();
@@ -5302,6 +5346,7 @@
     evaluateRecommendations();
   }
 
+  window.__gachaForceSkip = checkAndEnforceGachaNext;
   window.__gachaSkipVideo = checkAndEnforceGachaNext;
   window.__gachaPlayNext = checkAndEnforceGachaNext;
 
