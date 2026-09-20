@@ -70,6 +70,65 @@
         </div>
       </section>
 
+      <!-- Phone Remote Control & Queue Card (Prominent) -->
+      <section class="section popup-nas-section" style="border: 1px solid rgba(0, 229, 255, 0.35); background: linear-gradient(135deg, rgba(0, 229, 255, 0.08), rgba(22, 19, 41, 0.95)); border-radius: var(--radius-md); padding: 12px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">📱</span>
+            <div>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 12px; font-weight: 700; color: #fff;">Phone Remote &amp; Queue</span>
+                <span id="popupRemoteStatusBadge" style="display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 10px; background: rgba(255,82,82,0.15); color: #ff5252; border: 1px solid rgba(255,82,82,0.3);">
+                  <span class="status-dot" style="width: 5px; height: 5px; background: currentColor; box-shadow: 0 0 6px currentColor; border-radius: 50%;"></span>
+                  <span id="popupRemoteStatusText">OFFLINE</span>
+                </span>
+              </div>
+              <div style="font-size: 10px; color: var(--text-muted);">Control playback &amp; queue from mobile</div>
+            </div>
+          </div>
+          <label class="toggle-item" for="toggleRemoteServer" style="background:transparent; border:none; padding:0; margin:0; cursor:pointer;" title="Enable/Disable Phone Remote">
+            <input type="checkbox" id="toggleRemoteServer" class="mini-switch" checked>
+          </label>
+        </div>
+
+        <div id="popupRemoteDetails" class="popup-nas-details" style="background: rgba(0, 0, 0, 0.25); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); padding: 8px;">
+          <!-- ONLINE VIEW (Shown when server is running) -->
+          <div id="popupRemoteOnlineView" class="hidden" style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="popup-nas-input-group">
+              <label style="font-size: 10px; color: var(--text-secondary); display: flex; justify-content: space-between;">
+                <span>Remote Web URL:</span>
+                <span style="color: #00ffaa; font-size: 9px;">Ready to connect</span>
+              </label>
+              <div class="popup-nas-input-row" style="display: flex; gap: 6px;">
+                <input type="text" id="popupRemoteUrlInput" class="popup-nas-input" readonly value="http://127.0.0.1:3000/remote" style="font-size: 11px; flex: 1;">
+                <button type="button" id="btnPopupCopyRemoteUrl" class="btn-popup-test" title="Copy Remote URL" style="padding: 4px 8px; font-size: 10px;">📋 Copy</button>
+                <button type="button" id="btnPopupOpenRemoteTab" class="btn-popup-test" title="Open Remote Web Interface in New Tab" style="background: linear-gradient(135deg, #ff2e93, #7928ca); padding: 4px 8px; font-size: 10px;">🌐 Open</button>
+              </div>
+              <div id="popupRemoteIpChips" style="display:none; gap:5px; flex-wrap:wrap; margin-top: 4px;"></div>
+              <div id="popupRemoteQrContainer" style="text-align: center; margin-top: 6px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 8px;">
+                <div id="popupRemoteQrBox" style="width: 120px; height: 120px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
+                <div style="font-size: 10px; color: #a09bb8; margin-top: 5px;">📷 Scan QR with phone camera to open</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OFFLINE VIEW (Shown when server is not detected) -->
+          <div id="popupRemoteOfflineView" style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="font-size: 10px; color: #ddd; line-height: 1.4;">
+              💡 <strong>Start the local server</strong> on your computer to use Phone Remote:
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; background: #12101f; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
+              <code id="popupServerCmdText" style="flex: 1; font-size: 10px; color: #00ffaa; font-family: monospace; overflow-x: auto; white-space: nowrap;">./start-phone-remote.sh</code>
+              <button type="button" id="btnPopupCopyServerCmd" class="btn-popup-test" style="font-size: 9px; padding: 3px 6px;">📋 Copy</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+              <span style="font-size: 9px; color: #888;">Windows: double-click <code>start-phone-remote.bat</code></span>
+              <button type="button" id="btnPopupRetryRemote" class="btn-vol-reset" style="font-size: 9px; padding: 2px 8px;">🔄 Check</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Quick Instant Radio Button -->
       <button id="btnInstantRadio" class="btn-primary glow-btn" title="Launch random Gacha music stream on YouTube">
         <span class="btn-icon">✨</span>
@@ -322,32 +381,6 @@
               <div class="popup-nas-buttons">
                 <button type="button" class="btn-nas-act" id="btnPopupNasExport">💾 Backup to NAS</button>
                 <button type="button" class="btn-nas-act" id="btnPopupNasImport">📥 Restore from NAS</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Phone Remote Control & Queue -->
-          <div class="popup-nas-section" style="border: 1px solid rgba(0, 229, 255, 0.3); margin-top: 10px;">
-            <label class="toggle-item popup-nas-header" for="toggleRemoteServer">
-              <div class="toggle-desc">
-                <span class="toggle-title">📱 Phone Remote &amp; Queue</span>
-                <span class="toggle-sub">Add songs &amp; control playback from phone</span>
-              </div>
-              <input type="checkbox" id="toggleRemoteServer" class="mini-switch" checked>
-            </label>
-
-            <div id="popupRemoteDetails" class="popup-nas-details">
-              <div class="popup-nas-input-group">
-                <label>Remote Web URL:</label>
-                <div class="popup-nas-input-row">
-                  <input type="text" id="popupRemoteUrlInput" class="popup-nas-input" readonly value="http://127.0.0.1:3000/remote">
-                  <button type="button" id="btnPopupCopyRemoteUrl" class="btn-popup-test">📋 Copy</button>
-                </div>
-                <div id="popupRemoteIpChips" style="display:none; gap:6px; flex-wrap:wrap; margin-top:8px;"></div>
-                <div id="popupRemoteQrContainer" style="text-align: center; margin-top: 10px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;">
-                  <div id="popupRemoteQrBox" style="width: 130px; height: 130px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;"></div>
-                  <div style="font-size: 10px; color: #a09bb8; margin-top: 6px;">📷 Scan with phone camera to open</div>
-                </div>
               </div>
             </div>
           </div>

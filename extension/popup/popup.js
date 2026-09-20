@@ -80,6 +80,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const popupRemoteDetails = document.getElementById("popupRemoteDetails");
   const popupRemoteUrlInput = document.getElementById("popupRemoteUrlInput");
   const btnPopupCopyRemoteUrl = document.getElementById("btnPopupCopyRemoteUrl");
+  const btnPopupOpenRemoteTab = document.getElementById("btnPopupOpenRemoteTab");
+  const popupRemoteStatusBadge = document.getElementById("popupRemoteStatusBadge");
+  const popupRemoteStatusText = document.getElementById("popupRemoteStatusText");
+  const popupRemoteOnlineView = document.getElementById("popupRemoteOnlineView");
+  const popupRemoteOfflineView = document.getElementById("popupRemoteOfflineView");
+  const btnPopupCopyServerCmd = document.getElementById("btnPopupCopyServerCmd");
+  const btnPopupRetryRemote = document.getElementById("btnPopupRetryRemote");
+  const popupServerCmdText = document.getElementById("popupServerCmdText");
 
   const btnInstantRadio = document.getElementById("btnInstantRadio");
   const gachaSearchInput = document.getElementById("gachaSearchInput");
@@ -231,14 +239,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     let bestUrl = settings.remoteServerUrl || "";
     let addresses = [];
     let serverPort = 3000;
+    let serverOnline = false;
+
     // Probe common local ports to find running remote server and get its real LAN IP
     const probePorts = [3000, 3001, 3002, 8080, 8081];
     for (const port of probePorts) {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store" });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 600);
+        const res = await fetch(`http://127.0.0.1:${port}/api/status`, { cache: "no-store", signal: controller.signal });
+        clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
           serverPort = port;
+          serverOnline = true;
           if (data && Array.isArray(data.addresses)) {
             addresses = data.addresses;
           }
@@ -253,36 +267,68 @@ document.addEventListener("DOMContentLoaded", async () => {
       } catch (e) {}
     }
 
-    if (!bestUrl) {
-      bestUrl = settings.remoteServerUrl || "http://127.0.0.1:3000/remote";
-    }
+    if (serverOnline) {
+      if (!bestUrl) bestUrl = `http://127.0.0.1:${serverPort}/remote`;
+      if (popupRemoteStatusBadge) {
+        popupRemoteStatusBadge.style.background = "rgba(0, 255, 170, 0.15)";
+        popupRemoteStatusBadge.style.color = "#00ffaa";
+        popupRemoteStatusBadge.style.border = "1px solid rgba(0, 255, 170, 0.3)";
+      }
+      if (popupRemoteStatusText) popupRemoteStatusText.textContent = "ONLINE";
+      if (popupRemoteOnlineView) {
+        popupRemoteOnlineView.classList.remove("hidden");
+        popupRemoteOnlineView.style.display = "flex";
+      }
+      if (popupRemoteOfflineView) {
+        popupRemoteOfflineView.classList.add("hidden");
+        popupRemoteOfflineView.style.display = "none";
+      }
 
-    if (popupRemoteUrlInput) {
-      popupRemoteUrlInput.value = bestUrl;
-    }
-    renderPopupQrCode(bestUrl);
+      if (popupRemoteUrlInput) {
+        popupRemoteUrlInput.value = bestUrl;
+      }
+      renderPopupQrCode(bestUrl);
 
-    const chipsContainer = document.getElementById("popupRemoteIpChips");
-    if (chipsContainer) {
-      chipsContainer.innerHTML = "";
-      if (addresses.length > 1) {
-        chipsContainer.style.display = "flex";
-        addresses.forEach((info) => {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "btn-popup-test";
-          const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
-          btn.textContent = `${icon} ${info.name}: ${info.ip}`;
-          btn.style.cssText = "font-size:10px; padding:3px 7px; border-radius:10px; margin:2px; cursor:pointer;";
-          btn.onclick = () => {
-            const newUrl = `http://${info.ip}:${serverPort}/remote`;
-            if (popupRemoteUrlInput) popupRemoteUrlInput.value = newUrl;
-            renderPopupQrCode(newUrl);
-          };
-          chipsContainer.appendChild(btn);
-        });
-      } else {
-        chipsContainer.style.display = "none";
+      const chipsContainer = document.getElementById("popupRemoteIpChips");
+      if (chipsContainer) {
+        chipsContainer.innerHTML = "";
+        if (addresses.length > 1) {
+          chipsContainer.style.display = "flex";
+          addresses.forEach((info) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn-popup-test";
+            const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
+            btn.textContent = `${icon} ${info.name}: ${info.ip}`;
+            btn.style.cssText = "font-size:10px; padding:3px 7px; border-radius:10px; margin:2px; cursor:pointer;";
+            btn.onclick = () => {
+              const newUrl = `http://${info.ip}:${serverPort}/remote`;
+              if (popupRemoteUrlInput) popupRemoteUrlInput.value = newUrl;
+              renderPopupQrCode(newUrl);
+            };
+            chipsContainer.appendChild(btn);
+          });
+        } else {
+          chipsContainer.style.display = "none";
+        }
+      }
+    } else {
+      if (popupRemoteStatusBadge) {
+        popupRemoteStatusBadge.style.background = "rgba(255, 82, 82, 0.15)";
+        popupRemoteStatusBadge.style.color = "#ff5252";
+        popupRemoteStatusBadge.style.border = "1px solid rgba(255, 82, 82, 0.3)";
+      }
+      if (popupRemoteStatusText) popupRemoteStatusText.textContent = "OFFLINE";
+      if (popupRemoteOnlineView) {
+        popupRemoteOnlineView.classList.add("hidden");
+        popupRemoteOnlineView.style.display = "none";
+      }
+      if (popupRemoteOfflineView) {
+        popupRemoteOfflineView.classList.remove("hidden");
+        popupRemoteOfflineView.style.display = "flex";
+      }
+      if (popupRemoteUrlInput) {
+        popupRemoteUrlInput.value = settings.remoteServerUrl || "http://127.0.0.1:3000/remote";
       }
     }
   }
@@ -484,6 +530,47 @@ document.addEventListener("DOMContentLoaded", async () => {
           const orig = btnPopupCopyRemoteUrl.textContent;
           btnPopupCopyRemoteUrl.textContent = "Copied!";
           setTimeout(() => { btnPopupCopyRemoteUrl.textContent = orig; }, 1500);
+        }).catch(() => {});
+      }
+    });
+  }
+
+  if (btnPopupOpenRemoteTab) {
+    btnPopupOpenRemoteTab.addEventListener("click", () => {
+      const url = (popupRemoteUrlInput && popupRemoteUrlInput.value) || "http://127.0.0.1:3000/remote";
+      chrome.tabs.create({ url });
+    });
+  }
+
+  if (btnPopupCopyServerCmd) {
+    btnPopupCopyServerCmd.addEventListener("click", () => {
+      const cmd = (popupServerCmdText && popupServerCmdText.textContent) || "./start-phone-remote.sh";
+      navigator.clipboard.writeText(cmd).then(() => {
+        const orig = btnPopupCopyServerCmd.textContent;
+        btnPopupCopyServerCmd.textContent = "Copied!";
+        setTimeout(() => { btnPopupCopyServerCmd.textContent = orig; }, 1500);
+      }).catch(() => {});
+    });
+  }
+
+  if (btnPopupRetryRemote) {
+    btnPopupRetryRemote.addEventListener("click", async () => {
+      const orig = btnPopupRetryRemote.textContent;
+      btnPopupRetryRemote.textContent = "⏳...";
+      await discoverAndSetRemoteUrl();
+      setTimeout(() => { btnPopupRetryRemote.textContent = orig; }, 600);
+    });
+  }
+
+  if (popupRemoteQrBox) {
+    popupRemoteQrBox.addEventListener("click", () => {
+      if (popupRemoteUrlInput && popupRemoteUrlInput.value) {
+        navigator.clipboard.writeText(popupRemoteUrlInput.value).then(() => {
+          if (btnPopupCopyRemoteUrl) {
+            const orig = btnPopupCopyRemoteUrl.textContent;
+            btnPopupCopyRemoteUrl.textContent = "Copied!";
+            setTimeout(() => { btnPopupCopyRemoteUrl.textContent = orig; }, 1500);
+          }
         }).catch(() => {});
       }
     });
