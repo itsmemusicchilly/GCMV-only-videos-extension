@@ -940,10 +940,15 @@
     }
 
     // 2. Fresh entry from Home or Search: do not blast unmuted audio automatically!
-    // Instead, arm gesture unmute so the user's first tap on the player or screen un-mutes cleanly.
-    if (!isContinuousListeningSession) {
+    // Exception: APK (AndroidBridge) and m.youtube.com — the user already tapped to open YouTube,
+    // so treat as a continuous session immediately and auto-unmute without waiting for a gesture.
+    const isMobileContext = Boolean(window.AndroidBridge) || window.location.host === "m.youtube.com";
+    if (!isContinuousListeningSession && !isMobileContext) {
       armUserGestureUnmute(currentVid);
       return;
+    }
+    if (isMobileContext) {
+      isContinuousListeningSession = true;
     }
 
     // 3. Continuous autoplay / next video: proceed with safe auto-unmute
