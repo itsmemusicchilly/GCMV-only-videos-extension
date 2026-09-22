@@ -77,6 +77,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnPopupNasImport = document.getElementById("btnPopupNasImport");
 
   const toggleRemoteServer = document.getElementById("toggleRemoteServer");
+  const toggleBottomRightQr = document.getElementById("toggleBottomRightQr");
+  const toggleQrFullscreen = document.getElementById("toggleQrFullscreen");
+  const rowQrFullscreen = document.getElementById("rowQrFullscreen");
   const popupRemoteDetails = document.getElementById("popupRemoteDetails");
   const popupRemoteUrlInput = document.getElementById("popupRemoteUrlInput");
   const btnPopupCopyRemoteUrl = document.getElementById("btnPopupCopyRemoteUrl");
@@ -184,7 +187,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       smoothPlayback: true,
       preferredResolution: "auto",
       remoteServerEnabled: true,
-      remoteServerUrl: ""
+      remoteServerUrl: "",
+      showBottomRightQr: false,
+      showQrInFullscreen: true
     });
 
     // Version 1.0.0 enabled NAS access without authentication. Disable that
@@ -224,6 +229,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (toggleRemoteServer) {
       toggleRemoteServer.checked = settings.remoteServerEnabled !== false;
       if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", settings.remoteServerEnabled === false);
+    }
+    if (toggleBottomRightQr) {
+      toggleBottomRightQr.checked = settings.showBottomRightQr === true;
+      if (rowQrFullscreen) rowQrFullscreen.style.display = settings.showBottomRightQr ? "flex" : "none";
+    }
+    if (toggleQrFullscreen) {
+      toggleQrFullscreen.checked = settings.showQrInFullscreen !== false;
     }
     initPopupCloudRoom();
     discoverAndSetRemoteUrl();
@@ -578,6 +590,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       const isRemote = e.target.checked;
       if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", !isRemote);
       await extStorage.set({ remoteServerEnabled: isRemote });
+    });
+  }
+
+  if (toggleBottomRightQr) {
+    toggleBottomRightQr.addEventListener("change", async (e) => {
+      const isShow = e.target.checked;
+      if (rowQrFullscreen) rowQrFullscreen.style.display = isShow ? "flex" : "none";
+      await extStorage.set({ showBottomRightQr: isShow });
+    });
+  }
+
+  if (toggleQrFullscreen) {
+    toggleQrFullscreen.addEventListener("change", async (e) => {
+      await extStorage.set({ showQrInFullscreen: e.target.checked });
     });
   }
 

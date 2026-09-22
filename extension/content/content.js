@@ -139,7 +139,9 @@
     remoteServerEnabled: true,
     remoteServerUrl: "",
     remotePinEnabled: false,
-    remotePin: ""
+    remotePin: "",
+    showBottomRightQr: false,
+    showQrInFullscreen: true
   };
 
   let gachaWhitelist = {
@@ -3072,6 +3074,7 @@
 
       cloudPeer.on("open", (id) => {
         console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
+        renderBottomRightQrCode();
       });
 
       cloudPeer.on("connection", (conn) => {
@@ -3488,6 +3491,8 @@
         remoteServerUrl: "",
         remotePinEnabled: false,
         remotePin: "",
+        showBottomRightQr: false,
+        showQrInFullscreen: true,
         customSkipDb: {},
         ignoredSegments: {},
         retimedSegments: {}
@@ -3562,6 +3567,7 @@
       } else {
         removeFloatingJukebox();
       }
+      updateBottomRightQrVisibility();
       return;
     }
 
@@ -3583,6 +3589,7 @@
     } else {
       removeFloatingJukebox();
     }
+    updateBottomRightQrVisibility();
 
     const urlParams = new URLSearchParams(window.location.search);
     const videoId = urlParams.get("v") || (window.location.pathname.startsWith("/watch/") ? window.location.pathname.replace("/watch/", "") : "");
@@ -4824,6 +4831,23 @@
                     <div id="inpageRemoteQrBox" style="width: 140px; height: 140px; margin: 0 auto; background: #fff; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; cursor: pointer;" title="Click to copy URL"></div>
                     <div style="font-size: 11px; color: #a09bb8; margin-top: 6px;">📷 Scan with phone camera to open</div>
                   </div>
+                  <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255, 46, 147, 0.3);">
+                    <label class="gacha-inpage-item" for="inpageToggleBottomRightQr" style="padding: 6px 0; background: transparent; margin: 0;">
+                      <div class="gacha-inpage-desc">
+                        <span class="gacha-inpage-title" style="font-size: 12px;">📱 Display QR Code at Bottom Right</span>
+                        <span class="gacha-inpage-sub">Show on-screen floating QR badge so viewers can scan anytime</span>
+                      </div>
+                      <input type="checkbox" id="inpageToggleBottomRightQr" class="gacha-inpage-switch" ${settings.showBottomRightQr ? "checked" : ""}>
+                    </label>
+
+                    <label class="gacha-inpage-item" id="inpageRowQrFullscreen" for="inpageToggleQrFullscreen" style="padding: 6px 0; background: transparent; margin: 0; ${settings.showBottomRightQr ? '' : 'display:none;'}">
+                      <div class="gacha-inpage-desc">
+                        <span class="gacha-inpage-title" style="font-size: 12px;">📺 Show QR Code in Fullscreen</span>
+                        <span class="gacha-inpage-sub">Keep floating QR badge visible during fullscreen video playback</span>
+                      </div>
+                      <input type="checkbox" id="inpageToggleQrFullscreen" class="gacha-inpage-switch" ${settings.showQrInFullscreen !== false ? "checked" : ""}>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -5057,6 +5081,7 @@
     const inpageRemoteQrContainer = widget.querySelector("#inpageRemoteQrContainer");
 
     function renderInpageQrCode(url) {
+      renderBottomRightQrCode(url);
       if (!inpageRemoteQrBox || !url || url === "Server Stopped") {
         if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.add("gacha-hidden");
         return;
@@ -5181,6 +5206,36 @@
         await extStorage.set({ remoteServerEnabled: isRemote });
         if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
           window.AndroidBridge.savePref("remoteServerEnabled", JSON.stringify(isRemote));
+        }
+      };
+    }
+
+    const inpageToggleBottomRightQr = widget.querySelector("#inpageToggleBottomRightQr");
+    const inpageToggleQrFullscreen = widget.querySelector("#inpageToggleQrFullscreen");
+    const inpageRowQrFullscreen = widget.querySelector("#inpageRowQrFullscreen");
+
+    if (inpageToggleBottomRightQr) {
+      inpageToggleBottomRightQr.onchange = async (e) => {
+        const val = e.target.checked;
+        settings.showBottomRightQr = val;
+        bottomRightQrDismissed = false;
+        if (inpageRowQrFullscreen) inpageRowQrFullscreen.style.display = val ? "" : "none";
+        await extStorage.set({ showBottomRightQr: val });
+        updateBottomRightQrVisibility();
+        if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
+          window.AndroidBridge.savePref("showBottomRightQr", JSON.stringify(val));
+        }
+      };
+    }
+
+    if (inpageToggleQrFullscreen) {
+      inpageToggleQrFullscreen.onchange = async (e) => {
+        const val = e.target.checked;
+        settings.showQrInFullscreen = val;
+        await extStorage.set({ showQrInFullscreen: val });
+        updateBottomRightQrVisibility();
+        if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
+          window.AndroidBridge.savePref("showQrInFullscreen", JSON.stringify(val));
         }
       };
     }
@@ -5693,6 +5748,13 @@
     if (inpageToggleSearchChips) inpageToggleSearchChips.checked = settings.showSearchChips;
     if (inpageToggleFilterOfficial) inpageToggleFilterOfficial.checked = settings.filterOfficialVideos;
 
+    const inpageToggleBottomRightQr = document.querySelector("#inpageToggleBottomRightQr");
+    const inpageToggleQrFullscreen = document.querySelector("#inpageToggleQrFullscreen");
+    const inpageRowQrFullscreen = document.querySelector("#inpageRowQrFullscreen");
+    if (inpageToggleBottomRightQr) inpageToggleBottomRightQr.checked = settings.showBottomRightQr === true;
+    if (inpageToggleQrFullscreen) inpageToggleQrFullscreen.checked = settings.showQrInFullscreen !== false;
+    if (inpageRowQrFullscreen) inpageRowQrFullscreen.style.display = settings.showBottomRightQr ? "" : "none";
+
     if (statusText) {
       statusText.textContent = settings.enabled && settings.autoSkipNonGacha ? "ACTIVE" : "PAUSED";
       statusText.style.color = settings.enabled && settings.autoSkipNonGacha ? "#00ffaa" : "#8389a0";
@@ -5958,6 +6020,169 @@
     if (el) el.remove();
     const bd = document.getElementById("gacha-drawer-backdrop");
     if (bd) bd.remove();
+  }
+
+  // ==========================================================
+  // Bottom-Right Remote QR Code Overlay Badge
+  // ==========================================================
+  let currentRemoteQrUrl = "";
+  let bottomRightQrDismissed = false;
+
+  function getActiveRemoteUrl() {
+    if (currentRemoteQrUrl) return currentRemoteQrUrl;
+    if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
+      const u = window.AndroidBridge.getRemoteServerUrl();
+      if (u && u !== "Server Stopped") return u;
+    }
+    if (cloudRoomCode) {
+      return `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+    }
+    if (settings.remoteServerUrl) {
+      return settings.remoteServerUrl;
+    }
+    return "http://127.0.0.1:3000/remote";
+  }
+
+  function renderBottomRightQrCode(overrideUrl) {
+    const qrWidget = document.getElementById("gacha-bottom-right-qr");
+    if (!qrWidget) return;
+    const qrBox = qrWidget.querySelector("#gacha-br-qr-svg-box");
+    const roomText = qrWidget.querySelector("#gacha-br-qr-room-text");
+    if (!qrBox) return;
+
+    const url = overrideUrl || getActiveRemoteUrl();
+    if (overrideUrl) currentRemoteQrUrl = overrideUrl;
+
+    if (roomText) {
+      if (cloudRoomCode) {
+        roomText.textContent = `Room: ${cloudRoomCode}`;
+        roomText.style.display = "";
+      } else {
+        try {
+          const parsed = new URL(url);
+          roomText.textContent = `${parsed.hostname}:${parsed.port || "80"}`;
+        } catch (_) {
+          roomText.textContent = "Remote Control";
+        }
+      }
+    }
+
+    try {
+      if (typeof qrcode === "function") {
+        const qr = qrcode(0, "M");
+        qr.addData(url);
+        qr.make();
+        qrBox.innerHTML = qr.createSvgTag({ scalable: true });
+      } else {
+        qrBox.innerHTML = `<img src="${url.replace(/\/remote\/?$/, "")}/api/qr" style="width: 100%; height: 100%; object-fit: contain;" alt="QR Code" />`;
+      }
+    } catch (e) {
+      console.warn("[GCMV] Bottom-right QR render error:", e);
+    }
+  }
+
+  function injectBottomRightQrWidget() {
+    let qrWidget = document.getElementById("gacha-bottom-right-qr");
+    if (qrWidget) return qrWidget;
+
+    qrWidget = document.createElement("div");
+    qrWidget.id = "gacha-bottom-right-qr";
+    qrWidget.className = "gacha-br-qr-compact";
+    qrWidget.title = "Click to expand / collapse";
+
+    appendTrustedHtml(qrWidget, `
+      <button type="button" class="gacha-br-qr-close" title="Dismiss QR overlay" aria-label="Close">✕</button>
+      <div class="gacha-br-qr-box" id="gacha-br-qr-svg-box"></div>
+      <div class="gacha-br-qr-info">
+        <span class="gacha-br-qr-label">📱 Remote</span>
+        <span class="gacha-br-qr-room" id="gacha-br-qr-room-text">Room: ...</span>
+      </div>
+      <div class="gacha-br-qr-actions">
+        <button type="button" class="gacha-br-qr-btn gacha-br-qr-btn-copy" id="gacha-br-qr-copy-btn">📋 Copy URL</button>
+        <button type="button" class="gacha-br-qr-btn gacha-br-qr-btn-jukebox" id="gacha-br-qr-jukebox-btn">🎵 Open Jukebox</button>
+      </div>
+    `);
+
+    // Toggle compact / expanded on click
+    qrWidget.addEventListener("click", (e) => {
+      if (e.target.closest(".gacha-br-qr-close") || e.target.closest(".gacha-br-qr-btn")) {
+        return;
+      }
+      qrWidget.classList.toggle("gacha-br-qr-compact");
+      qrWidget.classList.toggle("gacha-br-qr-expanded");
+    });
+
+    // Close button
+    const closeBtn = qrWidget.querySelector(".gacha-br-qr-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        bottomRightQrDismissed = true;
+        qrWidget.classList.add("gacha-hidden");
+        document.documentElement.classList.remove("gacha-qr-overlay-active");
+      });
+    }
+
+    // Copy button
+    const copyBtn = qrWidget.querySelector("#gacha-br-qr-copy-btn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const url = getActiveRemoteUrl();
+        try {
+          await navigator.clipboard.writeText(url);
+          copyBtn.textContent = "✅ Copied!";
+          setTimeout(() => {
+            if (copyBtn) copyBtn.textContent = "📋 Copy URL";
+          }, 1500);
+        } catch (err) {
+          console.warn("[GCMV] Clipboard copy failed:", err);
+        }
+      });
+    }
+
+    // Open Jukebox button
+    const jukeboxBtn = qrWidget.querySelector("#gacha-br-qr-jukebox-btn");
+    if (jukeboxBtn) {
+      jukeboxBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof window.__gachaOpenJukebox === "function") {
+          window.__gachaOpenJukebox();
+        }
+      });
+    }
+
+    (document.body || document.documentElement).appendChild(qrWidget);
+    return qrWidget;
+  }
+
+  function updateBottomRightQrVisibility() {
+    const shouldShow = Boolean(settings.showBottomRightQr && !bottomRightQrDismissed);
+    const fullscreenEnabled = settings.showQrInFullscreen !== false;
+
+    document.documentElement.classList.toggle("gacha-qr-fullscreen-enabled", fullscreenEnabled);
+    if (document.body) {
+      document.body.classList.toggle("gacha-qr-fullscreen-enabled", fullscreenEnabled);
+    }
+
+    let qrWidget = document.getElementById("gacha-bottom-right-qr");
+
+    if (!shouldShow) {
+      if (qrWidget) {
+        qrWidget.classList.add("gacha-hidden");
+      }
+      document.documentElement.classList.remove("gacha-qr-overlay-active");
+      return;
+    }
+
+    if (!qrWidget) {
+      qrWidget = injectBottomRightQrWidget();
+    } else {
+      qrWidget.classList.remove("gacha-hidden");
+    }
+
+    document.documentElement.classList.add("gacha-qr-overlay-active");
+    renderBottomRightQrCode();
   }
 
   // ==========================================================
@@ -6398,12 +6623,17 @@
           "volumeBoost",
           "autoUnmute",
           "smoothPlayback",
-          "preferredResolution"
+          "preferredResolution",
+          "showBottomRightQr",
+          "showQrInFullscreen"
         ]) {
           if (changes[key] !== undefined) {
             settings[key] = changes[key].newValue;
             changed = true;
           }
+        }
+        if (changes.showBottomRightQr !== undefined) {
+          bottomRightQrDismissed = false;
         }
         if (changes.smoothPlayback !== undefined) {
           settings.smoothPlayback = changes.smoothPlayback.newValue !== false;
