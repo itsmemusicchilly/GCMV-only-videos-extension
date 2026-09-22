@@ -30,7 +30,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
 import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -416,15 +415,35 @@ public class RemoteServerManager {
 
     public String searchYouTube(String query) {
         if (query == null || query.trim().isEmpty()) return "[]";
+        HttpURLConnection conn = null;
         try {
-            String encoded = URLEncoder.encode(query.trim(), "UTF-8");
-            URL url = new URL("https://www.youtube.com/results?search_query=" + encoded);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
+            URL url = new URL("https://www.youtube.com/youtubei/v1/search?prettyPrint=false");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(8000);
+            conn.setRequestProperty("X-YouTube-Client-Name", "1");
+            conn.setRequestProperty("X-YouTube-Client-Version", "2.20240901.00.00");
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(12000);
+
+            JSONObject body = new JSONObject();
+            JSONObject client = new JSONObject();
+            client.put("clientName", "WEB");
+            client.put("clientVersion", "2.20240901.00.00");
+            client.put("hl", "en");
+            client.put("gl", "US");
+            JSONObject context = new JSONObject();
+            context.put("client", client);
+            body.put("context", context);
+            body.put("query", query.trim());
+            byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(payload.length);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload);
+            }
 
             if (conn.getResponseCode() != 200) return "[]";
 
@@ -432,69 +451,69 @@ public class RemoteServerManager {
             try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = r.readLine()) != null) {
-                    sb.append(line).append("\n");
+                    sb.append(line);
                     if (sb.length() > 3500000) break;
                 }
             }
 
-            String html = sb.toString();
-            int startIdx = html.indexOf("var ytInitialData = ");
-            if (startIdx == -1) startIdx = html.indexOf("ytInitialData = ");
-            if (startIdx != -1) {
-                int jsonStart = html.indexOf('{', startIdx);
-                int scriptEnd = html.indexOf(";</script>", jsonStart);
-                if (scriptEnd == -1) scriptEnd = html.indexOf("</script>", jsonStart);
-                if (jsonStart != -1 && scriptEnd != -1) {
-                    String rawJson = html.substring(jsonStart, scriptEnd).trim();
-                    if (rawJson.endsWith(";")) {
-                        rawJson = rawJson.substring(0, rawJson.length() - 1).trim();
-                    }
-                    JSONObject json = new JSONObject(rawJson);
-                    JSONArray results = new JSONArray();
-                    walkVideoRenderers(json, results, 20);
-                    return results.toString();
-                }
-            }
+            JSONObject json = new JSONObject(sb.toString());
+            JSONArray results = new JSONArray();
+            walkVideoRenderers(json, results, 20);
+            return results.toString();
         } catch (Exception e) {
             Log.e(TAG, "searchYouTube error: " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
         return "[]";
+    }
+
+    private String textFromYtNode(JSONObject node) {
+        if (node == null) return "";
+        if (node.has("simpleText")) return node.optString("simpleText", "");
+        JSONArray runs = node.optJSONArray("runs");
+        if (runs != null && runs.length() > 0) {
+            StringBuilder text = new StringBuilder();
+            for (int i = 0; i < runs.length(); i++) {
+                JSONObject run = runs.optJSONObject(i);
+                if (run != null) text.append(run.optString("text", ""));
+            }
+            return text.toString();
+        }
+        return "";
     }
 
     private void walkVideoRenderers(Object obj, JSONArray results, int maxCount) {
         if (results.length() >= maxCount || obj == null) return;
         if (obj instanceof JSONObject) {
             JSONObject jo = (JSONObject) obj;
-            if (jo.has("videoRenderer")) {
+            String rendererKey = null;
+            if (jo.has("videoRenderer")) rendererKey = "videoRenderer";
+            else if (jo.has("compactVideoRenderer")) rendererKey = "compactVideoRenderer";
+            else if (jo.has("videoWithContextRenderer")) rendererKey = "videoWithContextRenderer";
+            if (rendererKey != null) {
                 try {
-                    JSONObject vr = jo.getJSONObject("videoRenderer");
+                    JSONObject vr = jo.getJSONObject(rendererKey);
                     String videoId = vr.optString("videoId", "");
+                    if (videoId.isEmpty()) {
+                        JSONObject endpoint = vr.optJSONObject("navigationEndpoint");
+                        if (endpoint != null) {
+                            JSONObject watch = endpoint.optJSONObject("watchEndpoint");
+                            if (watch != null) videoId = watch.optString("videoId", "");
+                        }
+                    }
                     String title = "";
-                    if (vr.has("title")) {
-                        JSONObject tObj = vr.getJSONObject("title");
-                        if (tObj.has("runs")) {
-                            title = tObj.getJSONArray("runs").getJSONObject(0).optString("text", "");
-                        } else {
-                            title = tObj.optString("simpleText", "");
-                        }
-                    }
+                    if (vr.has("title")) title = textFromYtNode(vr.optJSONObject("title"));
+                    if (title.isEmpty() && vr.has("headline")) title = textFromYtNode(vr.optJSONObject("headline"));
                     String channel = "";
-                    if (vr.has("ownerText")) {
-                        JSONObject oObj = vr.getJSONObject("ownerText");
-                        if (oObj.has("runs")) {
-                            channel = oObj.getJSONArray("runs").getJSONObject(0).optString("text", "");
-                        }
-                    } else if (vr.has("shortBylineText")) {
-                        JSONObject sObj = vr.getJSONObject("shortBylineText");
-                        if (sObj.has("runs")) {
-                            channel = sObj.getJSONArray("runs").getJSONObject(0).optString("text", "");
-                        }
-                    }
+                    if (vr.has("ownerText")) channel = textFromYtNode(vr.optJSONObject("ownerText"));
+                    if (channel.isEmpty() && vr.has("shortBylineText")) channel = textFromYtNode(vr.optJSONObject("shortBylineText"));
                     String thumbnail = "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
                     if (vr.has("thumbnail")) {
                         JSONArray thumbs = vr.getJSONObject("thumbnail").optJSONArray("thumbnails");
                         if (thumbs != null && thumbs.length() > 0) {
                             thumbnail = thumbs.getJSONObject(thumbs.length() - 1).optString("url", thumbnail);
+                            if (thumbnail.startsWith("//")) thumbnail = "https:" + thumbnail;
                         }
                     }
                     if (!videoId.isEmpty() && !title.isEmpty()) {

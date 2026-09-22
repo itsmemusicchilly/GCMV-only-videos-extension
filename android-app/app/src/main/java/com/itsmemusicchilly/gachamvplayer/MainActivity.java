@@ -1422,14 +1422,14 @@ public class MainActivity extends AppCompatActivity {
             "    if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {\n" +
             "      var origIsTypeSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);\n" +
             "      window.MediaSource.isTypeSupported = function(type) {\n" +
-            "        if (typeof type === 'string' && /av01|av1/i.test(type)) return false;\n" +
+            "        if (typeof type === 'string' && /av01|av1|vp09|vp9/i.test(type)) return false;\n" +
             "        return origIsTypeSupported(type);\n" +
             "      };\n" +
             "    }\n" +
             "    if (window.HTMLMediaElement && window.HTMLMediaElement.prototype && typeof window.HTMLMediaElement.prototype.canPlayType === 'function') {\n" +
             "      var origCanPlay = window.HTMLMediaElement.prototype.canPlayType;\n" +
             "      window.HTMLMediaElement.prototype.canPlayType = function(type) {\n" +
-            "        if (typeof type === 'string' && /av01|av1/i.test(type)) return '';\n" +
+            "        if (typeof type === 'string' && /av01|av1|vp09|vp9/i.test(type)) return '';\n" +
             "        return origCanPlay.call(this, type);\n" +
             "      };\n" +
             "    }\n" +

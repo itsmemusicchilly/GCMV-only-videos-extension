@@ -12,16 +12,21 @@
   if (window.__GACHA_MV_LOADED__) return;
   window.__GACHA_MV_LOADED__ = true;
 
-  // Low-end hardware optimization: intercept MediaSource & canPlayType to block AV1 (av01)
-  // so YouTube's player uses hardware-accelerated AVC (H.264), eliminating CPU decoding lag.
+  // Low-end hardware optimization: intercept MediaSource & canPlayType to block AV1 (av01) and VP9 (vp09 / vp9)
+  // so YouTube's player uses hardware-accelerated AVC (H.264), eliminating CPU decoding lag on weaker devices.
   function installCodecOptimizationShim() {
     if (window.__GCMV_CODEC_SHIM_APPLIED__) return;
     window.__GCMV_CODEC_SHIM_APPLIED__ = true;
     try {
+      const isBlockedCodec = (type) => {
+        if (!type || typeof type !== "string") return false;
+        return /av01|av1|vp09|vp9/i.test(type);
+      };
+
       if (window.MediaSource && typeof window.MediaSource.isTypeSupported === "function") {
         const origIsTypeSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
         window.MediaSource.isTypeSupported = function (type) {
-          if (settings.smoothPlayback !== false && typeof type === "string" && /av01|av1/i.test(type)) {
+          if (settings.smoothPlayback !== false && isBlockedCodec(type)) {
             return false;
           }
           return origIsTypeSupported(type);
@@ -30,7 +35,7 @@
       if (window.HTMLMediaElement && window.HTMLMediaElement.prototype && typeof window.HTMLMediaElement.prototype.canPlayType === "function") {
         const origCanPlay = window.HTMLMediaElement.prototype.canPlayType;
         window.HTMLMediaElement.prototype.canPlayType = function (type) {
-          if (settings.smoothPlayback !== false && typeof type === "string" && /av01|av1/i.test(type)) {
+          if (settings.smoothPlayback !== false && isBlockedCodec(type)) {
             return "";
           }
           return origCanPlay.call(this, type);
@@ -77,6 +82,78 @@
     while (parsed.body.firstChild) {
       target.appendChild(parsed.body.firstChild);
     }
+  }
+
+  // YouTube's page enforces Trusted Types, so the Android WebView cannot assign
+  // a QR SVG string to innerHTML. Draw the modules with DOM nodes instead.
+  function localQrImageUrl(remoteUrl) {
+    try {
+      const parsed = new URL(remoteUrl);
+      if (parsed.protocol !== "http:") return "";
+      const host = parsed.hostname;
+      const isLocal = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local") ||
+        /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host);
+      if (!isLocal) return "";
+      return parsed.origin + "/api/qr";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function paintQrCode(target, url) {
+    if (!target) return false;
+    while (target.firstChild) target.removeChild(target.firstChild);
+    if (!url) return false;
+
+    const generator = (typeof qrcode === "function") ? qrcode : null;
+    if (generator) {
+      const qr = generator(0, "M");
+      qr.addData(url);
+      qr.make();
+      const count = qr.getModuleCount();
+      const svgNs = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNs, "svg");
+      svg.setAttribute("viewBox", "0 0 " + count + " " + count);
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", "100%");
+      svg.setAttribute("shape-rendering", "crispEdges");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", "QR Code");
+
+      const background = document.createElementNS(svgNs, "rect");
+      background.setAttribute("x", "0");
+      background.setAttribute("y", "0");
+      background.setAttribute("width", String(count));
+      background.setAttribute("height", String(count));
+      background.setAttribute("fill", "#ffffff");
+      svg.appendChild(background);
+
+      for (let row = 0; row < count; row++) {
+        for (let col = 0; col < count; col++) {
+          if (!qr.isDark(row, col)) continue;
+          const cell = document.createElementNS(svgNs, "rect");
+          cell.setAttribute("x", String(col));
+          cell.setAttribute("y", String(row));
+          cell.setAttribute("width", "1");
+          cell.setAttribute("height", "1");
+          cell.setAttribute("fill", "#000000");
+          svg.appendChild(cell);
+        }
+      }
+      target.appendChild(svg);
+      return true;
+    }
+
+    const imgSrc = localQrImageUrl(url);
+    if (!imgSrc) return false;
+    const img = document.createElement("img");
+    img.alt = "QR Code";
+    img.src = imgSrc;
+    img.style.width = "100%";
+    img.style.height = "100%";
+    img.style.objectFit = "contain";
+    target.appendChild(img);
+    return true;
   }
 
   // Universal storage adapter: supports Firefox (browser.storage Promises)
@@ -476,7 +553,7 @@
         // Soft Clipper (WaveShaperNode with tanh curve)
         waveShaperNode = audioCtx.createWaveShaper();
         waveShaperNode.curve = makeSoftClippingCurve();
-        waveShaperNode.oversample = "4x";
+        waveShaperNode.oversample = "none";
 
         gainNode.connect(compressorNode);
         compressorNode.connect(waveShaperNode);
@@ -2737,6 +2814,14 @@
     resumeUrl += params.toString();
     console.log("[GCMV] 🎵 Resuming saved Mix via URL:", resumeUrl);
 
+    if (mix.nextVideoId) {
+      const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+      if (moviePlayer) {
+        navigateToVideo(mix.nextVideoId, "", false, mix.listId, mix.nextIndex || "");
+        return;
+      }
+    }
+
     if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
       window.AndroidBridge.loadUrl(resumeUrl);
     } else {
@@ -2919,12 +3004,14 @@
       }
     }
 
+    dispatchMainWorldPlayerAction("previous");
     const prevBtn = document.querySelector(".ytp-prev-button, button.prev-button, [aria-label*='Previous video']");
     if (prevBtn) {
       prevBtn.click();
       showToast("⏮️ Previous video 🌸");
     } else if (moviePlayer && typeof moviePlayer.previousVideo === "function") {
       moviePlayer.previousVideo();
+      moviePlayer.playVideo?.();
       showToast("⏮️ Previous video 🌸");
     } else if (video) {
       video.currentTime = 0;
@@ -2936,24 +3023,16 @@
 
   function navigateToTrack(track) {
     if (!track || !track.videoId) return;
+    let listId = "";
+    let index = "";
     if (track.url) {
       try {
         const u = new URL(track.url, window.location.origin);
-        const listId = u.searchParams.get("list");
-        const index = u.searchParams.get("index");
-        if (listId) {
-          let path = `/watch?v=${track.videoId}&list=${listId}`;
-          if (index) path += `&index=${index}`;
-          if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
-            window.AndroidBridge.loadUrl("https://m.youtube.com" + path);
-            return;
-          }
-          window.location.href = "https://" + (window.location.host || "www.youtube.com") + path;
-          return;
-        }
+        listId = u.searchParams.get("list") || "";
+        index = u.searchParams.get("index") || "";
       } catch (_) {}
     }
-    navigateToVideo(track.videoId, track.title || "", false);
+    navigateToVideo(track.videoId, track.title || "", false, listId, index);
   }
 
   function dispatchMainWorldPlayerAction(action, param = "") {
@@ -2968,7 +3047,20 @@
         s.textContent = `(function() {
           try {
             const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-            if (p && typeof p.nextVideo === 'function') { p.nextVideo(); }
+            if (p && typeof p.nextVideo === 'function') {
+              p.nextVideo();
+              p.playVideo?.();
+            }
+          } catch (_) {}
+        })();`;
+      } else if (action === "previous") {
+        s.textContent = `(function() {
+          try {
+            const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+            if (p && typeof p.previousVideo === 'function') {
+              p.previousVideo();
+              p.playVideo?.();
+            }
           } catch (_) {}
         })();`;
       } else if (action === "loadVideoById" && param) {
@@ -3048,8 +3140,8 @@
     }
 
     const initialVid = getCurrentVideoId();
+    const wasFullscreen = isPlayerMediaFullscreen();
     showToast("⏭️ Skipping to next track... 🌸");
-    saveFullscreenStateBeforeNavigate();
     ensureYoutubeAutoplayToggleOn();
 
     // 6. Try native YouTube Next button
@@ -3081,6 +3173,7 @@
     if (moviePlayer && typeof moviePlayer.nextVideo === "function") {
       try {
         moviePlayer.nextVideo();
+        moviePlayer.playVideo?.();
       } catch (_) {}
     }
 
@@ -3108,7 +3201,7 @@
       window.location.search.includes("list=") ||
       Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
 
-    if (isMix) {
+    function triggerPlaylistFallback() {
       const playlistItems = document.querySelectorAll(
         "ytd-playlist-panel-renderer #items ytd-playlist-panel-video-renderer, ytd-playlist-panel-video-renderer, ytm-playlist-video-renderer, ytm-compact-playlist-video-renderer"
       );
@@ -3133,6 +3226,26 @@
         if (nextIndex < playlistItems.length) {
           const nextItem = playlistItems[nextIndex];
           const nextEl = nextItem.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || nextItem;
+          let nextVid = "";
+          if (nextEl && nextEl.href) {
+            try {
+              const u = new URL(nextEl.href, window.location.origin);
+              nextVid = u.searchParams.get("v") || "";
+            } catch (e) {}
+          }
+          if (wasFullscreen && nextVid) {
+            // Prioritize in-player loadVideoById to preserve fullscreen
+            dispatchMainWorldPlayerAction("loadVideoById", nextVid);
+            const p = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+            if (p && typeof p.loadVideoById === "function") {
+              try {
+                p.loadVideoById(nextVid);
+                p.playVideo?.();
+                return;
+              } catch (_) {}
+            }
+          }
+          saveFullscreenStateBeforeNavigate();
           if (typeof nextEl.click === "function") nextEl.click();
           if (nextEl.href) {
             setTimeout(() => {
@@ -3150,6 +3263,20 @@
       }
     }
 
+    if (isMix) {
+      if (wasFullscreen) {
+        // While in fullscreen: prioritize in-player API and do NOT click outer playlist links immediately.
+        // Wait 2 seconds: only if videoId hasn't changed, fall back to playlist fallback.
+        setTimeout(() => {
+          if (getCurrentVideoId() === initialVid) {
+            triggerPlaylistFallback();
+          }
+        }, 2000);
+      } else {
+        triggerPlaylistFallback();
+      }
+    }
+
     // 10. Verification and fallback if still on same video after 2500ms
     setTimeout(() => {
       const currentVid = getCurrentVideoId();
@@ -3161,7 +3288,7 @@
             video.currentTime = Math.max(0, video.duration - 0.2);
             video.play().catch(() => {});
           } catch (_) {}
-        } else if (!isPlayerMediaFullscreen() && !window.AndroidBridge) {
+        } else if (!window.AndroidBridge) {
           checkAndEnforceGachaNext("autoplay_guard");
         }
       }
@@ -3327,10 +3454,113 @@
     broadcastCloudMqttMessage(state);
   }
 
+  function textFromYtNode(node) {
+    if (!node) return "";
+    if (typeof node === "string") return node;
+    if (typeof node.simpleText === "string") return node.simpleText;
+    if (Array.isArray(node.runs)) return node.runs.map((run) => run && run.text ? run.text : "").join("");
+    return "";
+  }
+
+  function videoFromSearchRenderer(vr) {
+    if (!vr || typeof vr !== "object") return null;
+    const videoId = vr.videoId ||
+      (vr.navigationEndpoint && vr.navigationEndpoint.watchEndpoint && vr.navigationEndpoint.watchEndpoint.videoId) ||
+      "";
+    if (!videoId) return null;
+    const title = textFromYtNode(vr.title) || textFromYtNode(vr.headline);
+    if (!title) return null;
+    const channel = textFromYtNode(vr.ownerText) || textFromYtNode(vr.shortBylineText) || textFromYtNode(vr.longBylineText);
+    let thumbnail = "";
+    const thumbs = vr.thumbnail && vr.thumbnail.thumbnails;
+    if (Array.isArray(thumbs) && thumbs.length > 0) {
+      thumbnail = thumbs[thumbs.length - 1].url || "";
+      if (thumbnail.startsWith("//")) thumbnail = "https:" + thumbnail;
+    }
+    if (!thumbnail) thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    return { videoId, title, channel, thumbnail };
+  }
+
+  function collectSearchResults(root, limit) {
+    const max = limit || 20;
+    const results = [];
+    const seen = new Set();
+    const rendererKeys = ["videoRenderer", "compactVideoRenderer", "videoWithContextRenderer"];
+
+    function walk(node) {
+      if (!node || results.length >= max) return;
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item);
+        return;
+      }
+      if (typeof node !== "object") return;
+      for (const key of rendererKeys) {
+        if (!node[key]) continue;
+        const item = videoFromSearchRenderer(node[key]);
+        if (item && !seen.has(item.videoId)) {
+          seen.add(item.videoId);
+          results.push(item);
+          if (results.length >= max) return;
+        }
+      }
+      for (const value of Object.values(node)) walk(value);
+    }
+
+    walk(root);
+    return results;
+  }
+
+  function innertubeSearchContext() {
+    try {
+      if (window.ytcfg && typeof window.ytcfg.get === "function") {
+        const context = window.ytcfg.get("INNERTUBE_CONTEXT");
+        if (context && context.client) return context;
+      }
+    } catch (_) {}
+    const mobile = location.hostname === "m.youtube.com" || location.hostname.startsWith("m.");
+    return {
+      client: {
+        clientName: mobile ? "MWEB" : "WEB",
+        clientVersion: "2.20240901.00.00",
+        hl: "en",
+        gl: "US"
+      }
+    };
+  }
+
   async function performYouTubeSearch(query) {
     try {
-      const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-      const res = await fetch(searchUrl);
+      const context = innertubeSearchContext();
+      let endpoint = `${location.origin}/youtubei/v1/search?prettyPrint=false`;
+      try {
+        const apiKey = window.ytcfg && typeof window.ytcfg.get === "function" ? window.ytcfg.get("INNERTUBE_API_KEY") : "";
+        if (apiKey) endpoint += "&key=" + encodeURIComponent(apiKey);
+      } catch (_) {}
+      const headers = { "Content-Type": "application/json" };
+      if (context.client && context.client.clientName) {
+        headers["X-YouTube-Client-Name"] = context.client.clientName === "MWEB" ? "2" : "1";
+      }
+      if (context.client && context.client.clientVersion) {
+        headers["X-YouTube-Client-Version"] = context.client.clientVersion;
+      }
+      const res = await fetch(endpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+        body: JSON.stringify({ context, query })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const results = collectSearchResults(data, 20);
+        if (results.length > 0) return results;
+      }
+    } catch (e) {
+      console.warn("[GCMV] Innertube search error:", e);
+    }
+
+    try {
+      const searchUrl = `${location.origin}/results?search_query=${encodeURIComponent(query)}`;
+      const res = await fetch(searchUrl, { credentials: "same-origin" });
       if (!res.ok) return [];
       const html = await res.text();
       return parseYouTubeSearchResultsFromHtml(html);
@@ -3340,66 +3570,65 @@
     }
   }
 
-  function parseYouTubeSearchResultsFromHtml(html) {
-    const marker = "var ytInitialData = ";
-    let idx = html.indexOf(marker);
-    if (idx === -1) {
-      const marker2 = 'window["ytInitialData"] = ';
-      idx = html.indexOf(marker2);
-      if (idx === -1) return [];
-      idx += marker2.length;
-    } else {
-      idx += marker.length;
+  function extractYtInitialData(html) {
+    const markers = ["var ytInitialData = ", 'window["ytInitialData"] = ', "window['ytInitialData'] = "];
+    let idx = -1;
+    let marker = "";
+    for (const candidate of markers) {
+      const found = html.indexOf(candidate);
+      if (found !== -1 && (idx === -1 || found < idx)) {
+        idx = found;
+        marker = candidate;
+      }
+    }
+    if (idx === -1) return null;
+
+    let i = idx + marker.length;
+    while (html[i] === " " || html[i] === "\n" || html[i] === "\r") i++;
+
+    if (html[i] === "'" || html[i] === '"') {
+      const quote = html[i];
+      i++;
+      let out = "";
+      while (i < html.length) {
+        if (html[i] === "\\") {
+          const next = html[i + 1];
+          if (next === "x" && /^[0-9a-fA-F]{2}$/.test(html.slice(i + 2, i + 4))) {
+            out += String.fromCharCode(parseInt(html.slice(i + 2, i + 4), 16));
+            i += 4;
+            continue;
+          }
+          if (next === "u" && /^[0-9a-fA-F]{4}$/.test(html.slice(i + 2, i + 6))) {
+            out += String.fromCharCode(parseInt(html.slice(i + 2, i + 6), 16));
+            i += 6;
+            continue;
+          }
+          const escaped = { n: "\n", r: "\r", t: "\t", "\\": "\\", "'": "'", '"': '"' };
+          out += Object.prototype.hasOwnProperty.call(escaped, next) ? escaped[next] : (next || "");
+          i += 2;
+          continue;
+        }
+        if (html[i] === quote) break;
+        out += html[i];
+        i++;
+      }
+      return JSON.parse(out);
     }
 
-    let endIdx = html.indexOf(";</script>", idx);
-    if (endIdx === -1) endIdx = html.indexOf(";\n", idx);
-    if (endIdx === -1) return [];
+    const jsonStart = html.indexOf("{", i);
+    let endIdx = html.indexOf(";</script>", jsonStart);
+    if (endIdx === -1) endIdx = html.indexOf(";\n", jsonStart);
+    if (jsonStart === -1 || endIdx === -1) return null;
+    let jsonStr = html.substring(jsonStart, endIdx).trim();
+    if (jsonStr.endsWith(";")) jsonStr = jsonStr.slice(0, -1).trim();
+    return JSON.parse(jsonStr);
+  }
 
+  function parseYouTubeSearchResultsFromHtml(html) {
     try {
-      const jsonStr = html.substring(idx, endIdx).trim();
-      const root = JSON.parse(jsonStr);
-      const results = [];
-
-      const contents =
-        root.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
-      if (!Array.isArray(contents)) return results;
-
-      for (const section of contents) {
-        const items = section.itemSectionRenderer?.contents;
-        if (!Array.isArray(items)) continue;
-
-        for (const item of items) {
-          const vr = item.videoRenderer;
-          if (!vr || !vr.videoId) continue;
-
-          const videoId = vr.videoId;
-          let title = "";
-          if (vr.title?.runs && vr.title.runs.length > 0) {
-            title = vr.title.runs.map(r => r.text).join("");
-          } else if (vr.title?.simpleText) {
-            title = vr.title.simpleText;
-          }
-
-          let channel = "";
-          if (vr.ownerText?.runs && vr.ownerText.runs.length > 0) {
-            channel = vr.ownerText.runs.map(r => r.text).join("");
-          }
-
-          let thumbnail = "";
-          if (vr.thumbnail?.thumbnails && vr.thumbnail.thumbnails.length > 0) {
-            const thumbs = vr.thumbnail.thumbnails;
-            thumbnail = thumbs[thumbs.length - 1].url;
-          } else {
-            thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-          }
-
-          results.push({ videoId, title, channel, thumbnail });
-          if (results.length >= 20) break;
-        }
-        if (results.length >= 20) break;
-      }
-      return results;
+      const root = extractYtInitialData(html);
+      if (!root) return [];
+      return collectSearchResults(root, 20);
     } catch (e) {
       console.warn("[GCMV] Search parse error:", e);
       return [];
@@ -3814,6 +4043,90 @@
     }
   }
 
+  // ==========================================================
+  // Auto-Unfreeze Buffer Stall Watchdog
+  // Recovers playback if video pauses or hangs at a timestamp gap
+  // even though media is already buffered ahead in memory.
+  // ==========================================================
+  let bufferWatchdogInterval = null;
+  let lastObservedCurrentTime = -1;
+  let stallDetectionCounter = 0;
+  let lastNudgeTimestamp = 0;
+  let consecutiveNudges = 0;
+
+  function initBufferStallWatchdog(video) {
+    if (bufferWatchdogInterval) {
+      clearInterval(bufferWatchdogInterval);
+      bufferWatchdogInterval = null;
+    }
+    if (!video) return;
+
+    lastObservedCurrentTime = -1;
+    stallDetectionCounter = 0;
+
+    bufferWatchdogInterval = setInterval(() => {
+      if (!settings.enabled || settings.smoothPlayback === false) return;
+      if (!video || !document.body.contains(video)) return;
+
+      // Only monitor when video is supposed to be playing
+      if (video.paused || video.ended || video.seeking || window.__gachaUserManuallyPaused) {
+        stallDetectionCounter = 0;
+        lastObservedCurrentTime = video.currentTime;
+        return;
+      }
+
+      const curTime = video.currentTime;
+
+      // Check if time is stalled (moved less than 0.02s in 250ms interval)
+      if (lastObservedCurrentTime >= 0 && Math.abs(curTime - lastObservedCurrentTime) < 0.02) {
+        let bufferedAhead = 0;
+        try {
+          const b = video.buffered;
+          if (b && b.length > 0) {
+            for (let i = 0; i < b.length; i++) {
+              const start = b.start(i);
+              const end = b.end(i);
+              if (curTime >= start - 0.2 && curTime <= end) {
+                bufferedAhead = end - curTime;
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+
+        // If buffered ahead by at least 0.5s, data is in memory but decode/playback clock stalled!
+        if (bufferedAhead >= 0.5) {
+          stallDetectionCounter++;
+          // Stalled for ~500ms (2 consecutive intervals)
+          if (stallDetectionCounter >= 2) {
+            const now = Date.now();
+            if (now - lastNudgeTimestamp > 3000) {
+              consecutiveNudges = 0;
+            }
+            if (consecutiveNudges < 3) {
+              consecutiveNudges++;
+              lastNudgeTimestamp = now;
+              stallDetectionCounter = 0;
+              console.log(`[GCMV] Auto-unfreeze: buffered ahead ${bufferedAhead.toFixed(1)}s, nudging +0.05s from ${curTime.toFixed(2)}s`);
+              try {
+                video.currentTime = curTime + 0.05;
+                if (video.paused) {
+                  video.play().catch(() => {});
+                }
+              } catch (_) {}
+            }
+          }
+        } else {
+          stallDetectionCounter = 0;
+        }
+      } else {
+        stallDetectionCounter = 0;
+      }
+
+      lastObservedCurrentTime = curTime;
+    }, 250);
+  }
+
   function setupVideoPlayerListeners() {
     const video =
       document.querySelector("video.html5-main-video") || document.querySelector("video");
@@ -3827,6 +4140,7 @@
     // Initialize Web Audio Booster & Controls
     setupAudioBooster(video);
     injectPlayerBarBoostControl();
+    initBufferStallWatchdog(video);
 
     // Attach timeupdate for SponsorBlock skipping
     video.removeEventListener("timeupdate", handleVideoTimeUpdate);
@@ -4327,16 +4641,34 @@
       }, 300);
 
       // One-time fallback on user touch/pointer or desktop mouse/keyboard interaction
-      const onUserTouch = () => {
+      const onUserTouch = (evt) => {
         if (sessionStorage.getItem("gcmv_restore_fullscreen") === "true") {
+          sessionStorage.removeItem("gcmv_restore_fullscreen");
           const btn = document.querySelector(
             ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, .icon-button.player-control-fullscreen"
           );
           const vid = document.querySelector("video");
+          const target = evt && evt.target;
+          const isPlayerTarget = target && (target.closest("#movie_player, .html5-video-player, video") || target.tagName === "VIDEO");
+
           if (btn && typeof btn.click === "function") {
             btn.click();
           } else if (vid && typeof vid.requestFullscreen === "function") {
             vid.requestFullscreen().catch(() => {});
+          }
+
+          // If the user tapped/clicked on the video itself to recover fullscreen, YouTube's default click handler
+          // pauses the video. Automatically unpause so there is no accidental pause glitch!
+          if (isPlayerTarget) {
+            setTimeout(() => {
+              if (vid && vid.paused && !window.__gachaUserManuallyPaused) {
+                vid.play().catch(() => {});
+              }
+              const p = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+              if (p && typeof p.playVideo === "function") {
+                try { p.playVideo(); } catch (_) {}
+              }
+            }, 80);
           }
         }
       };
@@ -4349,45 +4681,68 @@
 
   window.__gachaRestoreFullscreen = checkAndRestoreFullscreen;
 
-  function navigateToVideo(videoId, title, stripMix = false) {
+  function navigateToVideo(videoId, title, stripMix = false, playlistId = "", playlistIndex = "") {
     if (!videoId) return;
     recordCurrentTrackSession(videoId, title);
-    saveFullscreenStateBeforeNavigate();
+    const wasFullscreen = isPlayerMediaFullscreen();
+    if (!wasFullscreen) {
+      saveFullscreenStateBeforeNavigate();
+    }
     recordRecentPlayedVideoId(videoId);
     window.__gachaUserManuallyPaused = false;
     lastNavigatedTime = Date.now();
 
-    const cleanPath = "/watch?v=" + videoId + (stripMix ? "&gcmv_queue=1" : "");
+    let cleanPath = "/watch?v=" + videoId;
+    if (!stripMix && playlistId) {
+      cleanPath += "&list=" + encodeURIComponent(playlistId);
+      if (playlistIndex) cleanPath += "&index=" + encodeURIComponent(playlistIndex);
+    } else if (stripMix) {
+      cleanPath += "&gcmv_queue=1";
+    }
     const fullCleanUrl = "https://" + (window.location.host || "m.youtube.com") + cleanPath;
 
     // 1. Try desktop YouTube movie_player SPA navigation (preserves fullscreen seamlessly without reload)
-    dispatchMainWorldPlayerAction("loadVideoById", videoId);
-    try {
-      const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
-      if (moviePlayer && typeof moviePlayer.loadVideoById === "function") {
-        moviePlayer.loadVideoById(videoId);
-        if (typeof moviePlayer.playVideo === "function") {
-          try { moviePlayer.playVideo(); } catch (_) {}
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (moviePlayer) {
+      dispatchMainWorldPlayerAction("loadVideoById", videoId);
+      try {
+        if (typeof moviePlayer.loadVideoById === "function") {
+          moviePlayer.loadVideoById(videoId);
+          if (typeof moviePlayer.playVideo === "function") {
+            moviePlayer.playVideo();
+          }
         }
-        try {
-          window.history.pushState(null, "", cleanPath);
+      } catch (_) {}
+      try {
+        window.history.pushState(null, "", cleanPath);
+        // Do NOT dispatch yt-navigate-finish when in fullscreen: it causes ytd-watch-flexy to re-render and drop fullscreen!
+        if (!wasFullscreen) {
           window.dispatchEvent(new CustomEvent("yt-navigate-finish"));
-        } catch (e) {}
-        if (title) showToast("▶️ Playing: " + title + " 🌸");
-        setTimeout(() => {
-          attemptAutoplayRecovery("navigateToVideo");
-        }, 350);
-        return;
-      }
-    } catch (e) {}
+        }
+      } catch (e) {}
+      if (title) showToast("▶️ Playing: " + title + " 🌸");
+      setTimeout(() => {
+        attemptAutoplayRecovery("navigateToVideo");
+      }, 350);
+
+      // Verify that the video changed after 2500ms; if stuck and NOT in fullscreen, fallback to hard navigation
+      setTimeout(() => {
+        if (getCurrentVideoId() !== videoId && !isPlayerMediaFullscreen() && !window.AndroidBridge) {
+          window.location.href = fullCleanUrl;
+        }
+      }, 2500);
+      return;
+    }
 
     // 2. AndroidBridge native navigation
     if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+      saveFullscreenStateBeforeNavigate();
       window.AndroidBridge.loadUrl("https://m.youtube.com" + cleanPath);
       return;
     }
 
     // 3. Fallback to location.href
+    saveFullscreenStateBeforeNavigate();
     window.location.href = fullCleanUrl;
   }
 
@@ -5711,16 +6066,11 @@
         return;
       }
       try {
-        if (typeof qrcode === "function") {
-          const qr = qrcode(0, "M");
-          qr.addData(url);
-          qr.make();
-          inpageRemoteQrBox.innerHTML = qr.createSvgTag({ scalable: true });
-          if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.remove("gacha-hidden");
-        } else {
-          inpageRemoteQrBox.innerHTML = `<img src="${url.replace(/\/remote\/?$/, "")}/api/qr" style="width: 100%; height: 100%; object-fit: contain;" alt="QR Code" />`;
-          if (inpageRemoteQrContainer) inpageRemoteQrContainer.classList.remove("gacha-hidden");
+        const painted = paintQrCode(inpageRemoteQrBox, url);
+        if (inpageRemoteQrContainer) {
+          inpageRemoteQrContainer.classList.toggle("gacha-hidden", !painted);
         }
+        if (!painted) console.warn("[GCMV] QR render error: generator unavailable");
       } catch (e) {
         console.warn("[GCMV] QR render error:", e);
       }
@@ -6735,14 +7085,8 @@
     }
 
     try {
-      if (typeof qrcode === "function") {
-        const qr = qrcode(0, "M");
-        qr.addData(url);
-        qr.make();
-        qrBox.innerHTML = qr.createSvgTag({ scalable: true });
-      } else {
-        qrBox.innerHTML = `<img src="${url.replace(/\/remote\/?$/, "")}/api/qr" style="width: 100%; height: 100%; object-fit: contain;" alt="QR Code" />`;
-      }
+      const painted = paintQrCode(qrBox, url);
+      if (!painted) console.warn("[GCMV] Bottom-left QR render error: generator unavailable");
     } catch (e) {
       console.warn("[GCMV] Bottom-left QR render error:", e);
     }
@@ -7090,21 +7434,41 @@
           }
           const nextIndex = currentIndex !== -1 ? currentIndex + 1 : 1;
           if (nextIndex < playlistItems.length) {
-            const nextEl = playlistItems[nextIndex].querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || playlistItems[nextIndex];
+            const nextItem = playlistItems[nextIndex];
+            const nextEl = nextItem.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || nextItem;
+            let nextVid = "";
+            if (nextEl && nextEl.href) {
+              try {
+                const u = new URL(nextEl.href, window.location.origin);
+                nextVid = u.searchParams.get("v") || "";
+              } catch (e) {}
+            }
             showToast("⏭️ Skipping to next playlist track... 🌸");
-            saveFullscreenStateBeforeNavigate();
-            if (typeof nextEl.click === "function") nextEl.click();
-            else if (nextEl.href) window.location.href = nextEl.href;
+            if (isPlayerMediaFullscreen() && nextVid) {
+              navigateToVideo(nextVid);
+            } else {
+              saveFullscreenStateBeforeNavigate();
+              if (typeof nextEl.click === "function") nextEl.click();
+              else if (nextEl.href) window.location.href = nextEl.href;
+            }
             return;
           }
         }
       }
 
       const skipTargetInMix = findNextNonGachaSkipTargetInMix(currentVideoId);
-      if (skipTargetInMix && skipTargetInMix.element) {
+      if (skipTargetInMix && (skipTargetInMix.element || skipTargetInMix.videoId)) {
         showToast("🛡️ Mix Guard: Skipping non-Gacha track ➔ " + skipTargetInMix.title.substring(0, 25) + "... 🌸");
-        saveFullscreenStateBeforeNavigate();
-        skipTargetInMix.element.click();
+        if (isPlayerMediaFullscreen() && skipTargetInMix.videoId) {
+          navigateToVideo(skipTargetInMix.videoId, skipTargetInMix.title);
+        } else {
+          saveFullscreenStateBeforeNavigate();
+          if (skipTargetInMix.element && typeof skipTargetInMix.element.click === "function") {
+            skipTargetInMix.element.click();
+          } else if (skipTargetInMix.videoId) {
+            navigateToVideo(skipTargetInMix.videoId, skipTargetInMix.title);
+          }
+        }
         return;
       }
       // If the next track is already Gacha (or playlist end), ensure autoplay toggle is active
