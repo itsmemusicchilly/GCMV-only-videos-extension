@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>🌸 Gacha MV Remote (Cloud P2P)</title>
   <style>
     :root {
@@ -64,7 +67,7 @@
 <body>
   <header>
     <h1>🌸 Gacha MV Remote</h1>
-    <span class="badge badge-disconnected" id="connBadge">● DISCONNECTED</span>
+    <span class="badge badge-disconnected" id="connBadge">○ DISCONNECTED</span>
   </header>
 
   <!-- Room Pairing Card -->
@@ -74,7 +77,7 @@
       <input type="text" id="inputRoomCode" class="room-input" placeholder="e.g. GCMV-8492" maxlength="12" autocomplete="off">
       <button id="btnConnectRoom" class="btn-room">Connect</button>
     </div>
-    <div id="roomHint" style="font-size: 10px; color: var(--subtext); margin-top: 6px;">
+    <div id="roomHint" style="font-size: 11px; color: var(--subtext); margin-top: 8px; line-height: 1.4;">
       Enter the Room Code shown in your computer's extension popup or Jukebox drawer.
     </div>
   </div>
@@ -90,8 +93,17 @@
         <span id="activeRoomTag" style="color:var(--cyan); font-family:monospace; font-weight:700;"></span>
       </div>
       <div class="ctrl-row">
+        <button class="btn-ctrl btn-accent" id="btnPrevTrack">⏮️ Prev</button>
         <button class="btn-ctrl btn-primary" id="btnPlayPause">⏸️ Pause</button>
         <button class="btn-ctrl btn-accent" id="btnSkipNext">⏭️ Skip</button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <span style="font-size:12px; font-weight:700; color:var(--subtext);">🔁 Loop Mode:</span>
+        <select id="selectLoopMode" style="background:#211a3e; color:#00ffaa; border:1px solid rgba(0,229,255,0.3); border-radius:8px; height:34px; padding:0 8px; font-size:12px; font-weight:700; outline:none; cursor:pointer;">
+          <option value="off">Off</option>
+          <option value="once">🔂 Loop Once</option>
+          <option value="infinite">🔁 Loop Indefinitely</option>
+        </select>
       </div>
       <div class="vol-wrap">
         <span style="font-size:12px; font-weight:700;">🔊 Vol:</span>
@@ -133,13 +145,16 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- PeerJS Client Library -->
+  <!-- Client Libraries -->
+  <script src="paho-mqtt-min.js"></script>
   <script src="peerjs.min.js"></script>
   <script>
+    let mqttClient = null;
     let peer = null;
-    let conn = null;
+    let peerConn = null;
     let activeRoomCode = "";
     let isPlaying = false;
+    let isConnected = false;
     let reconnectTimeout = null;
 
     function showToast(msg) {
@@ -166,12 +181,146 @@
       return `${m}:${rem < 10 ? '0' : ''}${rem}`;
     }
 
+    function onSuccessfulConnection(cleanCode) {
+      isConnected = true;
+      setConnectionBadge("connected", `ROOM ${cleanCode}`);
+      document.getElementById("mainControlsView").classList.remove("hidden");
+      document.getElementById("activeRoomTag").textContent = `Room: ${cleanCode}`;
+      document.getElementById("inputRoomCode").value = cleanCode;
+      const hintEl = document.getElementById("roomHint");
+      if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}!</span>`;
+      showToast(`🟢 Connected to Room ${cleanCode}!`);
+    }
+
     function sendCommand(cmd) {
-      if (!conn || !conn.open) {
-        showToast("⚠️ Not connected to player");
+      let sent = false;
+
+      // 1. Send via MQTT WebSocket
+      if (mqttClient && mqttClient.isConnected()) {
+        try {
+          const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
+          const msg = new PahoLib.MQTT.Message(JSON.stringify(cmd));
+          msg.destinationName = `gcmv/room/${activeRoomCode}/cmd`;
+          mqttClient.send(msg);
+          sent = true;
+        } catch (e) {
+          console.warn("[GCMV Remote] MQTT send error:", e);
+        }
+      }
+
+      // 2. Also send via PeerJS if open
+      if (peerConn && peerConn.open) {
+        try {
+          peerConn.send(cmd);
+          sent = true;
+        } catch (_) {}
+      }
+
+      if (!sent && !isConnected) {
+        showToast("⚠️ Not connected to player. Reconnecting...");
+        scheduleReconnect();
+      }
+    }
+
+    function connectMqtt(cleanCode) {
+      const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
+      if (!PahoLib || !PahoLib.MQTT || !PahoLib.MQTT.Client) {
+        console.warn("[GCMV Remote] Paho MQTT library not available");
         return;
       }
-      conn.send(cmd);
+
+      if (mqttClient) {
+        try { mqttClient.disconnect(); } catch (_) {}
+        mqttClient = null;
+      }
+
+      const clientId = "gcmv-rm-" + Math.random().toString(36).substring(2, 10);
+      const stateTopic = `gcmv/room/${cleanCode}/state`;
+      const client = new PahoLib.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
+
+      client.onConnectionLost = (resp) => {
+        console.warn("[GCMV Remote] MQTT connection lost:", resp ? resp.errorMessage : "");
+        if (!peerConn || !peerConn.open) {
+          isConnected = false;
+          setConnectionBadge("disconnected", "DISCONNECTED");
+          scheduleReconnect();
+        }
+      };
+
+      client.onMessageArrived = (msg) => {
+        try {
+          const data = JSON.parse(msg.payloadString);
+          handleIncomingData(data);
+        } catch (e) {
+          console.warn("[GCMV Remote] MQTT payload parse error:", e);
+        }
+      };
+
+      client.connect({
+        useSSL: true,
+        timeout: 8,
+        keepAliveInterval: 30,
+        cleanSession: true,
+        onSuccess: () => {
+          console.log(`[GCMV Remote] 🌸 MQTT connected to room ${cleanCode}`);
+          mqttClient = client;
+          client.subscribe(stateTopic, {
+            onSuccess: () => {
+              onSuccessfulConnection(cleanCode);
+              sendCommand({ action: "get_state" });
+            },
+            onFailure: (err) => {
+              console.warn("[GCMV Remote] Failed to subscribe to stateTopic:", err);
+            }
+          });
+        },
+        onFailure: (err) => {
+          console.warn("[GCMV Remote] MQTT connection failed:", err ? err.errorMessage : "");
+          if (!isConnected) {
+            scheduleReconnect();
+          }
+        }
+      });
+    }
+
+    function connectPeerJs(cleanCode) {
+      if (typeof Peer === "undefined") return;
+
+      if (peer) {
+        try { peer.destroy(); } catch (_) {}
+      }
+
+      try {
+        peer = new Peer();
+
+        peer.on("open", () => {
+          const targetPeerId = `gcmv-${cleanCode.toLowerCase()}`;
+          peerConn = peer.connect(targetPeerId, { reliable: true });
+
+          peerConn.on("open", () => {
+            onSuccessfulConnection(cleanCode);
+            peerConn.send({ action: "get_state" });
+          });
+
+          peerConn.on("data", (data) => {
+            handleIncomingData(data);
+          });
+
+          peerConn.on("close", () => {
+            if (!mqttClient || !mqttClient.isConnected()) {
+              isConnected = false;
+              setConnectionBadge("disconnected", "DISCONNECTED");
+              scheduleReconnect();
+            }
+          });
+        });
+
+        peer.on("error", (err) => {
+          console.warn("[GCMV Remote] Peer error:", err);
+        });
+      } catch (e) {
+        console.warn("[GCMV Remote] PeerJS init error:", e);
+      }
     }
 
     function connectToRoom(code) {
@@ -187,68 +336,17 @@
       const hintEl = document.getElementById("roomHint");
       if (hintEl) hintEl.innerHTML = `Connecting to Room <strong>${cleanCode}</strong>...`;
 
-      if (peer) {
-        try { peer.destroy(); } catch (_) {}
-      }
+      // 1. Connect via fast & rock-solid MQTT WebSocket relay
+      connectMqtt(cleanCode);
 
-      peer = new Peer();
-
-      peer.on("open", () => {
-        const targetPeerId = `gcmv-${cleanCode.toLowerCase()}`;
-        conn = peer.connect(targetPeerId, { reliable: true });
-
-        conn.on("open", () => {
-          setConnectionBadge("connected", `ROOM ${cleanCode}`);
-          document.getElementById("mainControlsView").classList.remove("hidden");
-          document.getElementById("activeRoomTag").textContent = `Room: ${cleanCode}`;
-          document.getElementById("inputRoomCode").value = cleanCode;
-          if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}!</span>`;
-          showToast(`🟢 Connected to Room ${cleanCode}!`);
-          // Request initial playback state
-          conn.send({ action: "get_state" });
-        });
-
-        conn.on("data", (data) => {
-          handleIncomingData(data);
-        });
-
-        conn.on("close", () => {
-          setConnectionBadge("disconnected", "DISCONNECTED");
-          showToast("🔴 Disconnected from player");
-          scheduleReconnect();
-        });
-
-        conn.on("error", (err) => {
-          console.warn("[GCMV Remote] Connection error:", err);
-          setConnectionBadge("disconnected", "ERROR");
-          showToast("❌ Connection failed. Check room code.");
-        });
-      });
-
-      peer.on("error", (err) => {
-        console.warn("[GCMV Remote] Peer error:", err);
-        if (err && err.type === "peer-unavailable") {
-          setConnectionBadge("disconnected", "PLAYER NOT FOUND");
-          showToast(`⚠️ Room "${cleanCode}" not found. Open YouTube on PC & refresh tab!`);
-          if (hintEl) {
-            hintEl.innerHTML = `
-              <span style="color:#ff5252; font-weight:700;">⚠️ Room "${cleanCode}" is not active.</span><br>
-              1. Open a YouTube video in a tab on your computer.<br>
-              2. <strong>Refresh the YouTube tab (F5)</strong> so the extension connects.<br>
-              3. Verify the Room Code in your extension popup matches <strong>${cleanCode}</strong>.
-            `;
-          }
-        } else {
-          setConnectionBadge("disconnected", "PEER ERROR");
-          showToast("❌ Cloud connection error: " + (err?.type || err?.message || ""));
-        }
-      });
+      // 2. Also connect via WebRTC PeerJS in parallel
+      connectPeerJs(cleanCode);
     }
 
     function scheduleReconnect() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       reconnectTimeout = setTimeout(() => {
-        if (activeRoomCode && (!conn || !conn.open)) {
+        if (activeRoomCode && !isConnected) {
           connectToRoom(activeRoomCode);
         }
       }, 4000);
@@ -270,6 +368,13 @@
         if (typeof data.volume === "number") {
           document.getElementById("sliderVol").value = data.volume;
           document.getElementById("volVal").textContent = `${Math.round(data.volume)}%`;
+        }
+
+        if (data.loopMode) {
+          const selectLoop = document.getElementById("selectLoopMode");
+          if (selectLoop && selectLoop.value !== data.loopMode) {
+            selectLoop.value = data.loopMode;
+          }
         }
 
         renderQueue(data.queue || []);
@@ -343,12 +448,24 @@
       connectToRoom(code);
     });
 
+    document.getElementById("inputRoomCode").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("btnConnectRoom").click();
+    });
+
+    document.getElementById("btnPrevTrack").addEventListener("click", () => {
+      sendCommand({ action: "prev" });
+    });
+
     document.getElementById("btnPlayPause").addEventListener("click", () => {
       sendCommand({ action: isPlaying ? "pause" : "play" });
     });
 
     document.getElementById("btnSkipNext").addEventListener("click", () => {
       sendCommand({ action: "skip" });
+    });
+
+    document.getElementById("selectLoopMode").addEventListener("change", (e) => {
+      sendCommand({ action: "set_loop", mode: e.target.value });
     });
 
     const sliderVol = document.getElementById("sliderVol");
@@ -393,14 +510,27 @@
     });
 
     // Auto-connect from URL params (e.g. ?room=GCMV-8492) or localStorage
-    window.addEventListener("DOMContentLoaded", () => {
+    function init() {
       const params = new URLSearchParams(window.location.search);
       const roomParam = params.get("room") || localStorage.getItem("gcmv_last_room");
       if (roomParam) {
         document.getElementById("inputRoomCode").value = roomParam;
         connectToRoom(roomParam);
       }
-    });
+
+      // Real-time state polling (every 2s) so playback time, progress and track changes stay live
+      setInterval(() => {
+        if (isConnected) {
+          sendCommand({ action: "get_state" });
+        }
+      }, 2000);
+    }
+
+    if (document.readyState === "loading") {
+      window.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
   </script>
 </body>
 </html>

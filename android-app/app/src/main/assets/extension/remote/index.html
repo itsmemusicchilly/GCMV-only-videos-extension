@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>🌸 Gacha MV Remote (Cloud P2P)</title>
   <style>
     :root {
@@ -514,6 +517,13 @@
         document.getElementById("inputRoomCode").value = roomParam;
         connectToRoom(roomParam);
       }
+
+      // Real-time state polling (every 2s) so playback time, progress and track changes stay live
+      setInterval(() => {
+        if (isConnected) {
+          sendCommand({ action: "get_state" });
+        }
+      }, 2000);
     }
 
     if (document.readyState === "loading") {

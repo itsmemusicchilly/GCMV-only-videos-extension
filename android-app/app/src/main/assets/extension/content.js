@@ -3560,6 +3560,7 @@
           title,
           isPlaying,
           volume,
+          loopMode: currentLoopMode,
           currentTime: video ? video.currentTime : 0,
           duration: video ? video.duration : 0,
           queue: cloudRemoteQueue
@@ -3582,6 +3583,15 @@
       }).catch(() => {});
     }
   }
+
+  // Periodic status update to Cloud Remote & Background Host (every 2.5s while active)
+  setInterval(() => {
+    if (!settings.enabled) return;
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    if (video && !video.paused) {
+      reportPlaybackStateToRemote();
+    }
+  }, 2500);
 
   let remotePollInterval = null;
   function startRemoteControlPolling() {

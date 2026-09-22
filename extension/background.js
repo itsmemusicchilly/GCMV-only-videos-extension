@@ -63,6 +63,7 @@ function broadcastCloudState() {
       currentVideo: cachedPlayerState.currentVideo,
       isPlaying: cachedPlayerState.isPlaying,
       volume: cachedPlayerState.volume,
+      loopMode: cachedPlayerState.loopMode || "off",
       queue: cachedPlayerState.queue
     }));
     msg.destinationName = stateTopic;
@@ -199,6 +200,9 @@ runtime.onMessage.addListener((msg, sender, sendResponse) => {
       cachedPlayerState.isPlaying = Boolean(msg.state.isPlaying);
       if (typeof msg.state.volume === "number") {
         cachedPlayerState.volume = msg.state.volume;
+      }
+      if (typeof msg.state.loopMode === "string") {
+        cachedPlayerState.loopMode = msg.state.loopMode;
       }
       if (Array.isArray(msg.state.queue)) {
         cachedPlayerState.queue = msg.state.queue;
