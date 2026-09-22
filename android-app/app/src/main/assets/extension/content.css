@@ -40,7 +40,7 @@ html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-left
 html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-right-qr {
   display: flex !important;
   visibility: visible !important;
-  opacity: 0.4 !important;
+  opacity: 0.75 !important;
 }
 
 html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-left-qr:hover,
@@ -873,7 +873,7 @@ select.gacha-time-input option:hover {
   cursor: pointer !important;
   user-select: none !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-  opacity: 0.4 !important;
+  opacity: 0.75 !important;
   transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease !important;
   pointer-events: auto !important;
   box-sizing: border-box !important;

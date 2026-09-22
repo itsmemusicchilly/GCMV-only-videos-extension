@@ -2951,6 +2951,184 @@
     navigateToVideo(track.videoId, track.title || "", false);
   }
 
+  async function executeSkipNextTrack(triggerSource = "user_skip") {
+    // 1. If currently in a loop mode, break out of loop on explicit skip
+    if (currentLoopMode !== "off") {
+      setLoopMode("off");
+    }
+
+    // 2. Check for queued video from Cloud Remote P2P Queue
+    if (cloudRemoteQueue && cloudRemoteQueue.length > 0) {
+      captureCurrentMixState();
+      const item = cloudRemoteQueue.shift();
+      extStorage.set({ cloudRemoteQueue }).catch(() => {});
+      broadcastCloudState();
+      if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+      showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
+      navigateToVideo(item.videoId, item.title, true);
+      return;
+    }
+
+    // 3. Check for queued video from Android APK Bridge
+    if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {
+      try {
+        const queuedJson = window.AndroidBridge.popNextQueuedVideo();
+        if (queuedJson) {
+          const item = JSON.parse(queuedJson);
+          if (item && item.videoId) {
+            captureCurrentMixState();
+            showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
+            navigateToVideo(item.videoId, item.title, true);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[GCMV] Error popping queued video from bridge:", e);
+      }
+    }
+
+    // 4. Check for queued video from Desktop Remote Server / NAS
+    if (!window.AndroidBridge && (settings.remoteServerEnabled !== false || settings.useNasServer)) {
+      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      try {
+        const res = await fetch(serverUrl + "/api/queue?pop=true", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.item && data.item.videoId) {
+            captureCurrentMixState();
+            showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
+            navigateToVideo(data.item.videoId, data.item.title, true);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 5. If no queued videos remain, check if we have a saved Mix to return to!
+    if (savedMixContext && savedMixContext.listId) {
+      resumeSavedMix();
+      return;
+    }
+
+    const initialVid = getCurrentVideoId();
+    showToast("⏭️ Skipping to next track... 🌸");
+    saveFullscreenStateBeforeNavigate();
+    ensureYoutubeAutoplayToggleOn();
+
+    // 6. Try native YouTube Next button
+    const nextSelectors = [
+      ".ytp-next-button",
+      "button.ytp-next-button",
+      "[data-testid='next-button']",
+      ".player-controls-next",
+      ".icon-button.player-control-next",
+      "ytm-next-button"
+    ];
+    let nextBtn = null;
+    for (const sel of nextSelectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        nextBtn = el;
+        break;
+      }
+    }
+    if (nextBtn) {
+      try {
+        nextBtn.click();
+      } catch (_) {}
+    }
+
+    // 7. Try YouTube player's movie_player API if present
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (moviePlayer && typeof moviePlayer.nextVideo === "function") {
+      try {
+        moviePlayer.nextVideo();
+      } catch (_) {}
+    }
+
+    // 8. Dispatch native YouTube Next keyboard shortcut (Shift + N)
+    try {
+      const shiftNInit = {
+        key: "N",
+        code: "KeyN",
+        shiftKey: true,
+        keyCode: 78,
+        which: 78,
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      };
+      const keydownEvt = new KeyboardEvent("keydown", shiftNInit);
+      const keyupEvt = new KeyboardEvent("keyup", shiftNInit);
+      (moviePlayer || document.body || window).dispatchEvent(keydownEvt);
+      (moviePlayer || document.body || window).dispatchEvent(keyupEvt);
+      window.dispatchEvent(keydownEvt);
+    } catch (_) {}
+
+    // 9. If in a mix or playlist panel, navigate to next playlist item
+    const isMix =
+      window.location.search.includes("list=") ||
+      Boolean(document.querySelector("ytd-playlist-panel-renderer, ytm-playlist-video-renderer"));
+
+    if (isMix) {
+      const playlistItems = document.querySelectorAll(
+        "ytd-playlist-panel-renderer #items ytd-playlist-panel-video-renderer, ytd-playlist-panel-video-renderer, ytm-playlist-video-renderer, ytm-compact-playlist-video-renderer"
+      );
+      if (playlistItems && playlistItems.length > 0) {
+        let currentIndex = -1;
+        for (let i = 0; i < playlistItems.length; i++) {
+          const item = playlistItems[i];
+          const link = item.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a");
+          let itemVid = "";
+          if (link && link.href) {
+            try {
+              const u = new URL(link.href, window.location.origin);
+              itemVid = u.searchParams.get("v") || "";
+            } catch (e) {}
+          }
+          if ((initialVid && itemVid === initialVid) || item.classList.contains("selected") || item.classList.contains("active") || item.hasAttribute("selected")) {
+            currentIndex = i;
+            break;
+          }
+        }
+        const nextIndex = currentIndex !== -1 ? currentIndex + 1 : 1;
+        if (nextIndex < playlistItems.length) {
+          const nextItem = playlistItems[nextIndex];
+          const nextEl = nextItem.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a") || nextItem;
+          if (typeof nextEl.click === "function") nextEl.click();
+          if (nextEl.href) {
+            setTimeout(() => {
+              if (getCurrentVideoId() === initialVid) {
+                if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+                  window.AndroidBridge.loadUrl(nextEl.href);
+                } else {
+                  window.location.href = nextEl.href;
+                }
+              }
+            }, 600);
+          }
+        }
+      }
+    }
+
+    // 10. Verification and fallback if still on same video after 650ms
+    setTimeout(() => {
+      const currentVid = getCurrentVideoId();
+      if (currentVid === initialVid) {
+        const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+        if (video && !isNaN(video.duration) && video.duration > 0 && video.currentTime < video.duration - 0.5) {
+          try {
+            video.currentTime = Math.max(0, video.duration - 0.2);
+            video.play().catch(() => {});
+          } catch (_) {}
+        } else {
+          checkAndEnforceGachaNext("autoplay_guard");
+        }
+      }
+      setTimeout(broadcastCloudState, 1000);
+    }, 650);
+  }
+
   let isHandlingQueueTransition = false;
   function checkPreemptiveQueueTransition(video) {
     if (!video || isHandlingQueueTransition) return;
@@ -3194,7 +3372,8 @@
         break;
 
       case "skip":
-        checkAndEnforceGachaNext(true);
+      case "next":
+        executeSkipNextTrack("remote_skip");
         setTimeout(broadcastCloudState, 1000);
         break;
 
@@ -3423,19 +3602,10 @@
               video.play().catch(() => {});
             } else if (item.action === "pause" && video) {
               video.pause();
-            } else if (item.action === "next") {
-              const oldHref = window.location.href;
-              const nextBtn = document.querySelector(".ytp-next-button, [data-testid=\"next-button\"], .player-controls-next");
-              let clicked = false;
-              if (nextBtn) {
-                nextBtn.click();
-                clicked = true;
-              }
-              setTimeout(() => {
-                if (!clicked || window.location.href === oldHref) {
-                  checkAndEnforceGachaNext();
-                }
-              }, 1000);
+            } else if (item.action === "prev") {
+              playPreviousTrack();
+            } else if (item.action === "next" || item.action === "skip") {
+              executeSkipNextTrack("remote_skip");
             } else if (item.action === "play_now" && item.videoId) {
               captureCurrentMixState();
               navigateToVideo(item.videoId, item.title, true);
@@ -5538,7 +5708,7 @@
       btnInpagePlayPause.onclick = () => togglePlayPause();
     }
     if (btnInpageSkipNext) {
-      btnInpageSkipNext.onclick = () => checkAndEnforceGachaNext("user_skip");
+      btnInpageSkipNext.onclick = () => executeSkipNextTrack("user_skip");
     }
     if (inpageSelectLoopMode) {
       inpageSelectLoopMode.value = currentLoopMode;
@@ -6626,19 +6796,16 @@
   }
 
   async function checkAndEnforceGachaNext(triggerSource = "autoplay_guard") {
-    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip" || triggerSource === "queue_immediate" || triggerSource === true;
-    if (!settings.enabled || (!settings.autoplayGuard && !isExplicitSkip)) return;
-
+    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip" || triggerSource === true;
     if (isExplicitSkip) {
-      if (currentLoopMode !== "off") {
-        setLoopMode("off");
-      }
-    } else {
-      if (currentLoopMode !== "off") {
-        const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
-        handleLoopReplay(video);
-        return;
-      }
+      return executeSkipNextTrack(triggerSource);
+    }
+    if (!settings.enabled || (!settings.autoplayGuard && triggerSource !== "queue_immediate")) return;
+
+    if (currentLoopMode !== "off") {
+      const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+      handleLoopReplay(video);
+      return;
     }
 
     ensureYoutubeAutoplayToggleOn();
@@ -6863,9 +7030,9 @@
     evaluateRecommendations();
   }
 
-  window.__gachaForceSkip = checkAndEnforceGachaNext;
-  window.__gachaSkipVideo = checkAndEnforceGachaNext;
-  window.__gachaPlayNext = checkAndEnforceGachaNext;
+  window.__gachaForceSkip = () => executeSkipNextTrack("user_skip");
+  window.__gachaSkipVideo = () => executeSkipNextTrack("user_skip");
+  window.__gachaPlayNext = () => executeSkipNextTrack("user_skip");
 
   function showToast(msg, videoId = "", channelName = "") {
     const existing = document.querySelector(".gacha-toast");
