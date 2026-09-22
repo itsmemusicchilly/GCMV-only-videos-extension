@@ -28,6 +28,95 @@
             android:textSize="18sp"
             android:textStyle="bold" />
 
+        <!-- Playback Navigation & Loop Bar -->
+        <LinearLayout
+            android:id="@+id/layout_playback_controls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#211A3E"
+            android:padding="12dp"
+            android:layout_marginBottom="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_modal_prev"
+                    style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:backgroundTint="#2D2254"
+                    android:text="⏮️ Prev"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="8dp" />
+
+                <Button
+                    android:id="@+id/btn_modal_play_pause"
+                    style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginHorizontal="4dp"
+                    android:backgroundTint="#FF2E93"
+                    android:text="⏯️ Play"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="8dp" />
+
+                <Button
+                    android:id="@+id/btn_modal_skip"
+                    style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#2D2254"
+                    android:text="⏭️ Skip"
+                    android:textAllCaps="false"
+                    android:textColor="#00E5FF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="8dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔁 Loop Mode:"
+                    android:textColor="#A09BB8"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/spinner_modal_loop"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:background="#16122A"
+                    android:popupBackground="#16122A"
+                    android:theme="@style/ThemeOverlay.AppCompat.Dark" />
+            </LinearLayout>
+        </LinearLayout>
+
         <!-- Active Remote Queue Section -->
         <LinearLayout
             android:id="@+id/layout_jukebox_queue_section"

@@ -2500,3 +2500,93 @@ body.gacha-block-ads .ad-showing .video-stream.html5-main-video {
   transform: translateY(-10px) !important;
 }
 
+/* ==========================================================
+   Jukebox In-Panel Playback Controls & Loop Selector
+   ========================================================== */
+.gacha-panel-player-bar {
+  background: linear-gradient(135deg, rgba(255, 46, 147, 0.08), rgba(0, 229, 255, 0.08));
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gacha-player-btn-group {
+  display: flex;
+  gap: 6px;
+}
+
+.gacha-player-btn {
+  flex: 1;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.gacha-player-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: #00e5ff;
+}
+
+.gacha-player-btn:active {
+  transform: scale(0.96);
+}
+
+.gacha-player-btn-primary {
+  background: linear-gradient(135deg, #ff2e93, #7928ca);
+  border-color: rgba(255, 46, 147, 0.4);
+}
+
+.gacha-player-btn-primary:hover {
+  background: linear-gradient(135deg, #ff4fa3, #903fe0);
+  border-color: #ff2e93;
+}
+
+.gacha-player-loop-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gacha-loop-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #a09bb8;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gacha-loop-select {
+  background: #1a1530;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  border-radius: 8px;
+  color: #00ffaa;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 8px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.gacha-loop-select:focus,
+.gacha-loop-select:hover {
+  border-color: #00e5ff;
+}
+

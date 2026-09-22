@@ -257,6 +257,19 @@
     }
   };
 
+  window.__gachaPlayPrevious = function() {
+    if (typeof playPreviousTrack === "function") playPreviousTrack();
+  };
+  window.__gachaTogglePlayPause = function() {
+    if (typeof togglePlayPause === "function") togglePlayPause();
+  };
+  window.__gachaSetLoopMode = function(mode) {
+    if (typeof setLoopMode === "function") setLoopMode(mode);
+  };
+  window.__gachaGetLoopMode = function() {
+    return typeof currentLoopMode !== "undefined" ? currentLoopMode : "off";
+  };
+
   // Keywords that identify a true Gacha video in title or channel
   const GACHA_POSITIVE_KEYWORDS = [
     "gcmv",
@@ -2726,18 +2739,235 @@
     }
   }
 
+  // ==========================================================
+  // Playback Navigation & Looping State (Session-scoped)
+  // ==========================================================
+  let sessionPlaybackHistory = []; // [ { videoId, title, url } ] (max 50)
+  let currentSessionTrack = null;  // { videoId, title, url }
+  let currentLoopMode = "off";     // "off" | "once" | "infinite"
+  let lastPrevClickTime = 0;
+
+  function recordCurrentTrackSession(videoId, title) {
+    const vid = videoId || getCurrentVideoId();
+    if (!vid) return;
+
+    if (currentSessionTrack && currentSessionTrack.videoId === vid) {
+      if ((!currentSessionTrack.title || currentSessionTrack.title === vid) && title) {
+        currentSessionTrack.title = title;
+      }
+      return;
+    }
+
+    if (currentSessionTrack && currentSessionTrack.videoId) {
+      const lastHistory = sessionPlaybackHistory[sessionPlaybackHistory.length - 1];
+      if (!lastHistory || lastHistory.videoId !== currentSessionTrack.videoId) {
+        sessionPlaybackHistory.push(currentSessionTrack);
+        if (sessionPlaybackHistory.length > 50) {
+          sessionPlaybackHistory.shift();
+        }
+      }
+    }
+
+    let trackTitle = title;
+    if (!trackTitle) {
+      const titleEl = document.querySelector("h1.title, h1.ytm-watch-video-title, #title h1, .slim-video-information-title, yt-formatted-string.ytd-watch-metadata");
+      trackTitle = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, "").trim();
+    }
+
+    currentSessionTrack = {
+      videoId: vid,
+      title: trackTitle || vid,
+      url: window.location.href
+    };
+  }
+
+  function getTrackStartTime() {
+    const vid = getCurrentVideoId();
+    if (vid && Array.isArray(activeVideoSegments)) {
+      const introSeg = activeVideoSegments.find(s => s.start <= 1.0 && s.end > 1.0 && (s.category === "intro" || s.category === "sponsor"));
+      if (introSeg && (settings.skipIntroOutro || settings.skipSponsor)) {
+        return introSeg.end;
+      }
+    }
+    return 0;
+  }
+
+  function updateInpagePlayPauseState() {
+    const btn = document.getElementById("btnInpagePlayPause");
+    if (!btn) return;
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const isPlaying = video && !video.paused && !video.ended;
+    btn.innerHTML = isPlaying ? "⏸️ Pause" : "▶️ Play";
+  }
+
+  function togglePlayPause() {
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (video) {
+      if (video.paused || video.ended) {
+        window.__gachaUserManuallyPaused = false;
+        if (moviePlayer && typeof moviePlayer.playVideo === "function") {
+          try { moviePlayer.playVideo(); } catch (_) { video.play().catch(() => {}); }
+        } else {
+          video.play().catch(() => {});
+        }
+      } else {
+        window.__gachaUserManuallyPaused = true;
+        if (moviePlayer && typeof moviePlayer.pauseVideo === "function") {
+          try { moviePlayer.pauseVideo(); } catch (_) { video.pause(); }
+        } else {
+          video.pause();
+        }
+      }
+    }
+    updateInpagePlayPauseState();
+    broadcastCloudState();
+  }
+
+  function setLoopMode(mode) {
+    if (mode !== "off" && mode !== "once" && mode !== "infinite") {
+      mode = "off";
+    }
+    currentLoopMode = mode;
+
+    const inpageLoopSelect = document.getElementById("inpageSelectLoopMode");
+    if (inpageLoopSelect && inpageLoopSelect.value !== currentLoopMode) {
+      inpageLoopSelect.value = currentLoopMode;
+    }
+
+    if (mode === "once") {
+      showToast("🔂 Loop: Current track will repeat once 🌸");
+    } else if (mode === "infinite") {
+      showToast("🔁 Loop: Looping indefinitely 🌸");
+    }
+
+    broadcastCloudState();
+  }
+
+  function handleLoopReplay(video) {
+    if (!video) {
+      video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    }
+
+    if (currentLoopMode === "once") {
+      setLoopMode("off");
+      showToast("🔂 Replaying track once 🌸");
+    } else if (currentLoopMode === "infinite") {
+      showToast("🔁 Looping track 🌸");
+    }
+
+    const startTime = getTrackStartTime();
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (moviePlayer && typeof moviePlayer.seekTo === "function") {
+      try {
+        moviePlayer.seekTo(startTime, true);
+        if (typeof moviePlayer.playVideo === "function") moviePlayer.playVideo();
+      } catch (_) {}
+    } else if (video) {
+      video.currentTime = startTime;
+      try {
+        const p = video.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      } catch (_) {}
+    }
+    updateInpagePlayPauseState();
+    broadcastCloudState();
+  }
+
+  function playPreviousTrack() {
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    const now = Date.now();
+    const isDoubleClicked = (now - lastPrevClickTime) < 2500;
+    lastPrevClickTime = now;
+
+    if (currentLoopMode !== "off") {
+      setLoopMode("off");
+    }
+
+    const curTime = video ? video.currentTime : 0;
+    if (video && curTime > 3.0 && !isDoubleClicked) {
+      const startTime = getTrackStartTime();
+      if (moviePlayer && typeof moviePlayer.seekTo === "function") {
+        try {
+          moviePlayer.seekTo(startTime, true);
+          if (typeof moviePlayer.playVideo === "function") moviePlayer.playVideo();
+        } catch (_) {}
+      } else {
+        video.currentTime = startTime;
+        try { video.play().catch(() => {}); } catch (_) {}
+      }
+      showToast("⏮️ Restarting track 🌸");
+      updateInpagePlayPauseState();
+      broadcastCloudState();
+      return;
+    }
+
+    if (sessionPlaybackHistory.length > 0) {
+      const prevTrack = sessionPlaybackHistory.pop();
+      if (prevTrack && prevTrack.videoId) {
+        currentSessionTrack = null;
+        showToast("⏮️ Playing previous: " + (prevTrack.title || prevTrack.videoId) + " 🌸");
+        navigateToTrack(prevTrack);
+        setTimeout(broadcastCloudState, 1000);
+        return;
+      }
+    }
+
+    const prevBtn = document.querySelector(".ytp-prev-button, button.prev-button, [aria-label*='Previous video']");
+    if (prevBtn) {
+      prevBtn.click();
+      showToast("⏮️ Previous video 🌸");
+    } else if (moviePlayer && typeof moviePlayer.previousVideo === "function") {
+      moviePlayer.previousVideo();
+      showToast("⏮️ Previous video 🌸");
+    } else if (video) {
+      video.currentTime = 0;
+      try { video.play().catch(() => {}); } catch (_) {}
+      showToast("⏮️ Restarting track 🌸");
+    }
+    setTimeout(broadcastCloudState, 1000);
+  }
+
+  function navigateToTrack(track) {
+    if (!track || !track.videoId) return;
+    if (track.url) {
+      try {
+        const u = new URL(track.url, window.location.origin);
+        const listId = u.searchParams.get("list");
+        const index = u.searchParams.get("index");
+        if (listId) {
+          let path = `/watch?v=${track.videoId}&list=${listId}`;
+          if (index) path += `&index=${index}`;
+          if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+            window.AndroidBridge.loadUrl("https://m.youtube.com" + path);
+            return;
+          }
+          window.location.href = "https://" + (window.location.host || "www.youtube.com") + path;
+          return;
+        }
+      } catch (_) {}
+    }
+    navigateToVideo(track.videoId, track.title || "", false);
+  }
+
   let isHandlingQueueTransition = false;
   function checkPreemptiveQueueTransition(video) {
     if (!video || isHandlingQueueTransition) return;
     if (!settings.enabled) return;
-
-    if (!hasAnyQueuedVideos()) return;
 
     const cur = video.currentTime;
     const dur = video.duration;
 
     // Trigger pre-emptively when within 0.8s of the end or if ended
     if (dur > 0 && (cur >= dur - 0.8 || video.ended)) {
+      if (currentLoopMode !== "off") {
+        isHandlingQueueTransition = true;
+        handleLoopReplay(video);
+        setTimeout(() => { isHandlingQueueTransition = false; }, 2500);
+        return;
+      }
+      if (!hasAnyQueuedVideos()) return;
       isHandlingQueueTransition = true;
       try { video.pause(); } catch (_) {}
       captureCurrentMixState();
@@ -2752,6 +2982,13 @@
 
   function handleVideoEnded() {
     if (!settings.enabled) return;
+
+    // 0. If loop mode is active, repeat current track
+    if (currentLoopMode !== "off") {
+      const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+      handleLoopReplay(video);
+      return;
+    }
 
     // 1. If we have queued videos, play immediately with 0 delay!
     if (hasAnyQueuedVideos()) {
@@ -2819,11 +3056,16 @@
     const currentTime = video ? video.currentTime : 0;
     const duration = video ? video.duration : 0;
 
+    if (currentSessionTrack && currentSessionTrack.videoId === videoId && (!currentSessionTrack.title || currentSessionTrack.title === videoId) && title) {
+      currentSessionTrack.title = title;
+    }
+
     return {
       type: "STATE",
       currentVideo: { videoId, title, currentTime, duration },
       isPlaying,
       volume,
+      loopMode: currentLoopMode,
       queue: cloudRemoteQueue,
       roomCode: cloudRoomCode
     };
@@ -2937,17 +3179,29 @@
 
       case "play":
         if (video) video.play().catch(() => {});
+        updateInpagePlayPauseState();
         broadcastCloudState();
         break;
 
       case "pause":
         if (video) video.pause();
+        updateInpagePlayPauseState();
         broadcastCloudState();
+        break;
+
+      case "prev":
+        playPreviousTrack();
         break;
 
       case "skip":
         checkAndEnforceGachaNext(true);
         setTimeout(broadcastCloudState, 1000);
+        break;
+
+      case "set_loop":
+        if (data.mode) {
+          setLoopMode(data.mode);
+        }
         break;
 
       case "volume":
@@ -3751,6 +4005,7 @@
 
   function navigateToVideo(videoId, title, stripMix = false) {
     if (!videoId) return;
+    recordCurrentTrackSession(videoId, title);
     saveFullscreenStateBeforeNavigate();
     recordRecentPlayedVideoId(videoId);
     window.__gachaUserManuallyPaused = false;
@@ -4495,8 +4750,8 @@
   function injectFloatingJukebox() {
     const existing = document.getElementById("gacha-floating-widget");
     if (existing) {
-      if (!existing.querySelector("#inpageToggleNas")) {
-        existing.remove(); // Auto-upgrade DOM to latest version with NAS controls
+      if (!existing.querySelector("#inpageToggleNas") || !existing.querySelector("#btnInpagePrevTrack")) {
+        existing.remove(); // Auto-upgrade DOM to latest version with player controls & NAS
       } else {
         return;
       }
@@ -4542,6 +4797,23 @@
           <div class="gacha-guard-status">
             <span>🛡️ Non-Gacha Skipper</span>
             <span id="gachaPanelSkipperStatus" style="color:#00ffaa;">ACTIVE</span>
+          </div>
+
+          <!-- In-Panel Playback Navigation & Loop Bar -->
+          <div class="gacha-panel-player-bar" id="inpagePlayerControls">
+            <div class="gacha-player-btn-group">
+              <button type="button" class="gacha-player-btn" id="btnInpagePrevTrack" title="Previous Track (Shift+P, Alt+Left)">⏮️ Prev</button>
+              <button type="button" class="gacha-player-btn gacha-player-btn-primary" id="btnInpagePlayPause" title="Play / Pause">⏯️ Play</button>
+              <button type="button" class="gacha-player-btn" id="btnInpageSkipNext" title="Skip to Next">⏭️ Next</button>
+            </div>
+            <div class="gacha-player-loop-group">
+              <span class="gacha-loop-label">🔁 Loop:</span>
+              <select id="inpageSelectLoopMode" class="gacha-loop-select" title="Loop Mode">
+                <option value="off">Off</option>
+                <option value="once">🔂 Loop Once</option>
+                <option value="infinite">🔁 Loop Indefinitely</option>
+              </select>
+            </div>
           </div>
 
           <!-- In-Panel Volume Booster (1x - 10x) -->
@@ -5254,12 +5526,35 @@
     const selectCat = widget.querySelector("#gachaAddCategory");
     const btnAddCustomSkip = widget.querySelector("#gachaBtnAddCustomSkip");
 
+    const btnInpagePrevTrack = widget.querySelector("#btnInpagePrevTrack");
+    const btnInpagePlayPause = widget.querySelector("#btnInpagePlayPause");
+    const btnInpageSkipNext = widget.querySelector("#btnInpageSkipNext");
+    const inpageSelectLoopMode = widget.querySelector("#inpageSelectLoopMode");
+
+    if (btnInpagePrevTrack) {
+      btnInpagePrevTrack.onclick = () => playPreviousTrack();
+    }
+    if (btnInpagePlayPause) {
+      btnInpagePlayPause.onclick = () => togglePlayPause();
+    }
+    if (btnInpageSkipNext) {
+      btnInpageSkipNext.onclick = () => checkAndEnforceGachaNext("user_skip");
+    }
+    if (inpageSelectLoopMode) {
+      inpageSelectLoopMode.value = currentLoopMode;
+      inpageSelectLoopMode.onchange = (e) => setLoopMode(e.target.value);
+    }
+
     function openPanel() {
       const p = document.getElementById("gachaJukeboxPanel");
       if (!p) return;
       p.classList.remove("gacha-hidden");
       p.style.setProperty("display", "flex", "important");
       jukeboxPanelOpen = true;
+
+      updateInpagePlayPauseState();
+      const loopSel = document.getElementById("inpageSelectLoopMode");
+      if (loopSel) loopSel.value = currentLoopMode;
 
       const bd = document.getElementById("gacha-drawer-backdrop");
       if (bd) bd.classList.add("active");
@@ -6331,8 +6626,20 @@
   }
 
   async function checkAndEnforceGachaNext(triggerSource = "autoplay_guard") {
-    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip" || triggerSource === "queue_immediate";
+    const isExplicitSkip = triggerSource === "remote_skip" || triggerSource === "user_skip" || triggerSource === "queue_immediate" || triggerSource === true;
     if (!settings.enabled || (!settings.autoplayGuard && !isExplicitSkip)) return;
+
+    if (isExplicitSkip) {
+      if (currentLoopMode !== "off") {
+        setLoopMode("off");
+      }
+    } else {
+      if (currentLoopMode !== "off") {
+        const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+        handleLoopReplay(video);
+        return;
+      }
+    }
 
     ensureYoutubeAutoplayToggleOn();
 
@@ -6784,6 +7091,8 @@
     isSkipping = false;
     lastSkippedSegment = null;
     removeSkipOverlay();
+    recordCurrentTrackSession();
+    updateInpagePlayPauseState();
 
     // If navigating away from watch pages to Home or Search, reset continuous listening session
     if (!isWatchPage()) {
@@ -6925,6 +7234,23 @@
         runAdBlockerCycle();
       }
     }, 1500);
+
+    // Desktop Playback Keyboard Shortcuts (Shift+P, Alt+Left)
+    if (!window.__gachaPlaybackShortcutsAttached__) {
+      window.__gachaPlaybackShortcutsAttached__ = true;
+      window.addEventListener("keydown", (e) => {
+        const tag = (e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "");
+        if (tag === "input" || tag === "textarea" || (e.target && e.target.isContentEditable)) {
+          return;
+        }
+
+        if ((e.shiftKey && (e.key === "P" || e.key === "p")) || (e.altKey && e.key === "ArrowLeft")) {
+          e.preventDefault();
+          e.stopPropagation();
+          playPreviousTrack();
+        }
+      }, true);
+    }
   }
 
   startInit();

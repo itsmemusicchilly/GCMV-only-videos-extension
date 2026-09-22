@@ -868,8 +868,8 @@ public class RemoteServerManager {
             // API: Playback Control
             if ("/api/control".equals(path) && "POST".equals(method)) {
                 JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
-                String action = json.optString("action", "").trim(); // play, pause, next, volume, play_now
-                Object val = json.opt("value");
+                String action = json.optString("action", "").trim(); // play, pause, next, prev, set_loop, volume, play_now
+                Object val = json.has("mode") ? json.opt("mode") : json.opt("value");
 
                 if ("next".equals(action)) {
                     QueueItem next = popNextQueuedVideo();
@@ -1028,8 +1028,17 @@ public class RemoteServerManager {
                 "    <div class=\"card-title\">🎵 Now Playing on Player</div>\n" +
                 "    <div class=\"now-playing-title\" id=\"nowPlayingTitle\">Loading...</div>\n" +
                 "    <div class=\"ctrl-row\">\n" +
+                "      <button class=\"btn-ctrl btn-accent\" id=\"btnPrevTrack\">⏮️ Prev</button>\n" +
                 "      <button class=\"btn-ctrl btn-primary\" id=\"btnPlayPause\">⏸️ Pause</button>\n" +
                 "      <button class=\"btn-ctrl btn-accent\" id=\"btnSkipNext\">⏭️ Skip</button>\n" +
+                "    </div>\n" +
+                "    <div style=\"display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);\">\n" +
+                "      <span style=\"font-size:12px; font-weight:700; color:var(--subtext);\">🔁 Loop Mode:</span>\n" +
+                "      <select id=\"selectLoopMode\" style=\"background:#211a3e; color:#00ffaa; border:1px solid rgba(0,229,255,0.3); border-radius:8px; height:34px; padding:0 8px; font-size:12px; font-weight:700; outline:none; cursor:pointer;\">\n" +
+                "        <option value=\"off\">Off</option>\n" +
+                "        <option value=\"once\">🔂 Loop Once</option>\n" +
+                "        <option value=\"infinite\">🔁 Loop Indefinitely</option>\n" +
+                "      </select>\n" +
                 "    </div>\n" +
                 "    <div class=\"vol-wrap\">\n" +
                 "      <span style=\"font-size:13px; font-weight:700;\">🔊 Volume:</span>\n" +
@@ -1208,6 +1217,16 @@ public class RemoteServerManager {
                 "    document.getElementById('btnPlayNext').addEventListener('click', () => addVideo('play_next'));\n" +
                 "    document.getElementById('btnAddQueue').addEventListener('click', () => addVideo('add_queue'));\n" +
                 "\n" +
+                "    document.getElementById('btnPrevTrack').addEventListener('click', async () => {\n" +
+                "      await api('/api/control', {\n" +
+                "        method: 'POST',\n" +
+                "        headers: { 'Content-Type': 'application/json' },\n" +
+                "        body: JSON.stringify({ action: 'prev' })\n" +
+                "      });\n" +
+                "      showToast('⏮️ Previous track');\n" +
+                "      setTimeout(refreshStatus, 600);\n" +
+                "    });\n" +
+                "\n" +
                 "    document.getElementById('btnPlayPause').addEventListener('click', async () => {\n" +
                 "      await api('/api/control', {\n" +
                 "        method: 'POST',\n" +
@@ -1226,6 +1245,14 @@ public class RemoteServerManager {
                 "      });\n" +
                 "      showToast('⏭️ Skipped!');\n" +
                 "      setTimeout(refreshStatus, 600);\n" +
+                "    });\n" +
+                "\n" +
+                "    document.getElementById('selectLoopMode').addEventListener('change', async (e) => {\n" +
+                "      await api('/api/control', {\n" +
+                "        method: 'POST',\n" +
+                "        headers: { 'Content-Type': 'application/json' },\n" +
+                "        body: JSON.stringify({ action: 'set_loop', mode: e.target.value })\n" +
+                "      });\n" +
                 "    });\n" +
                 "\n" +
                 "    document.getElementById('btnClearQueue').addEventListener('click', async () => {\n" +

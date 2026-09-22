@@ -90,8 +90,17 @@
         <span id="activeRoomTag" style="color:var(--cyan); font-family:monospace; font-weight:700;"></span>
       </div>
       <div class="ctrl-row">
+        <button class="btn-ctrl btn-accent" id="btnPrevTrack">⏮️ Prev</button>
         <button class="btn-ctrl btn-primary" id="btnPlayPause">⏸️ Pause</button>
         <button class="btn-ctrl btn-accent" id="btnSkipNext">⏭️ Skip</button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08);">
+        <span style="font-size:12px; font-weight:700; color:var(--subtext);">🔁 Loop Mode:</span>
+        <select id="selectLoopMode" style="background:#211a3e; color:#00ffaa; border:1px solid rgba(0,229,255,0.3); border-radius:8px; height:34px; padding:0 8px; font-size:12px; font-weight:700; outline:none; cursor:pointer;">
+          <option value="off">Off</option>
+          <option value="once">🔂 Loop Once</option>
+          <option value="infinite">🔁 Loop Indefinitely</option>
+        </select>
       </div>
       <div class="vol-wrap">
         <span style="font-size:12px; font-weight:700;">🔊 Vol:</span>
@@ -358,6 +367,13 @@
           document.getElementById("volVal").textContent = `${Math.round(data.volume)}%`;
         }
 
+        if (data.loopMode) {
+          const selectLoop = document.getElementById("selectLoopMode");
+          if (selectLoop && selectLoop.value !== data.loopMode) {
+            selectLoop.value = data.loopMode;
+          }
+        }
+
         renderQueue(data.queue || []);
       } else if (data.type === "SEARCH_RESULTS") {
         renderSearchResults(data.results || []);
@@ -433,12 +449,20 @@
       if (e.key === "Enter") document.getElementById("btnConnectRoom").click();
     });
 
+    document.getElementById("btnPrevTrack").addEventListener("click", () => {
+      sendCommand({ action: "prev" });
+    });
+
     document.getElementById("btnPlayPause").addEventListener("click", () => {
       sendCommand({ action: isPlaying ? "pause" : "play" });
     });
 
     document.getElementById("btnSkipNext").addEventListener("click", () => {
       sendCommand({ action: "skip" });
+    });
+
+    document.getElementById("selectLoopMode").addEventListener("change", (e) => {
+      sendCommand({ action: "set_loop", mode: e.target.value });
     });
 
     const sliderVol = document.getElementById("sliderVol");

@@ -31,6 +31,19 @@
             android:textSize="16sp"
             android:textStyle="bold" />
 
+        <!-- Previous Track Button -->
+        <Button
+            android:id="@+id/btn_prev_track"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="6dp"
+            android:text="⏮️ Prev"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
         <!-- Jukebox Streams Button -->
         <Button
             android:id="@+id/btn_jukebox"

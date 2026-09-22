@@ -31,6 +31,7 @@ import android.webkit.WebViewClient;
 import android.net.Uri;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -77,6 +78,7 @@ public class MainActivity extends AppCompatActivity {
     private View btnSettings;
     private View btnJukebox;
     private View btnSkips;
+    private View btnPrevTrack;
     private ImageButton btnReload;
 
     private View customView;
@@ -105,6 +107,7 @@ public class MainActivity extends AppCompatActivity {
         btnSettings = findViewById(R.id.btn_settings);
         btnJukebox = findViewById(R.id.btn_jukebox);
         btnSkips = findViewById(R.id.btn_skips);
+        btnPrevTrack = findViewById(R.id.btn_prev_track);
         btnReload = findViewById(R.id.btn_reload);
 
         loadExtensionAssets();
@@ -143,11 +146,19 @@ public class MainActivity extends AppCompatActivity {
                     case "pause":
                         webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
                         break;
+                    case "prev":
+                        webView.evaluateJavascript("(function(){ if(typeof window.__gachaPlayPrevious==='function'){ window.__gachaPlayPrevious(); } })()", null);
+                        break;
                     case "next":
                         if (customView != null) {
                             wasFullscreenBeforeNavigate = true;
                         }
                         webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('remote_skip'); } else { var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next, .icon-button.player-control-next, ytm-next-button'); if(btn) btn.click(); } })()", null);
+                        break;
+                    case "set_loop":
+                        if (value != null) {
+                            webView.evaluateJavascript("(function(){ if(typeof window.__gachaSetLoopMode==='function'){ window.__gachaSetLoopMode('" + value.toString() + "'); } })()", null);
+                        }
                         break;
                     case "volume":
                         if (value instanceof Number) {
@@ -166,6 +177,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupTopBarAndFab() {
+        if (btnPrevTrack != null) {
+            btnPrevTrack.setOnClickListener(v -> {
+                if (webView != null) {
+                    webView.evaluateJavascript("(function(){ if(typeof window.__gachaPlayPrevious==='function'){ window.__gachaPlayPrevious(); } })()", null);
+                }
+            });
+        }
+
         if (btnSettings != null) {
             btnSettings.setOnClickListener(v -> showNativeSettingsModal());
         }
@@ -843,6 +862,70 @@ public class MainActivity extends AppCompatActivity {
         View btnRadio = view.findViewById(R.id.btn_native_instant_radio);
         EditText etSearch = view.findViewById(R.id.et_search_gacha);
         View btnSearchGo = view.findViewById(R.id.btn_search_gacha_go);
+
+        Button btnModalPrev = view.findViewById(R.id.btn_modal_prev);
+        Button btnModalPlayPause = view.findViewById(R.id.btn_modal_play_pause);
+        Button btnModalSkip = view.findViewById(R.id.btn_modal_skip);
+        Spinner spinnerLoop = view.findViewById(R.id.spinner_modal_loop);
+
+        if (btnModalPrev != null) {
+            btnModalPrev.setOnClickListener(v -> {
+                if (webView != null) {
+                    webView.evaluateJavascript("if(typeof window.__gachaPlayPrevious==='function'){ window.__gachaPlayPrevious(); }", null);
+                }
+            });
+        }
+
+        if (btnModalPlayPause != null) {
+            btnModalPlayPause.setOnClickListener(v -> {
+                if (webView != null) {
+                    webView.evaluateJavascript("if(typeof window.__gachaTogglePlayPause==='function'){ window.__gachaTogglePlayPause(); }", null);
+                }
+            });
+        }
+
+        if (btnModalSkip != null) {
+            btnModalSkip.setOnClickListener(v -> {
+                if (webView != null) {
+                    webView.evaluateJavascript("if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('user_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('user_skip'); }", null);
+                }
+            });
+        }
+
+        if (spinnerLoop != null) {
+            final String[] loopValues = new String[] { "off", "once", "infinite" };
+            final String[] loopLabels = new String[] { "Off", "Loop Once (🔂 1x)", "Loop Indefinitely (🔁 ∞)" };
+            ArrayAdapter<String> loopAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, loopLabels);
+            loopAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinnerLoop.setAdapter(loopAdapter);
+
+            if (webView != null) {
+                webView.evaluateJavascript("(function(){ return typeof window.__gachaGetLoopMode==='function' ? window.__gachaGetLoopMode() : 'off'; })()", res -> {
+                    String mode = (res != null) ? res.replace("\"", "").trim() : "off";
+                    int idx = 0;
+                    if ("once".equals(mode)) idx = 1;
+                    else if ("infinite".equals(mode)) idx = 2;
+                    spinnerLoop.setSelection(idx, false);
+                });
+            }
+
+            final boolean[] isUserSelection = new boolean[] { false };
+            spinnerLoop.post(() -> isUserSelection[0] = true);
+
+            spinnerLoop.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                    if (!isUserSelection[0]) return;
+                    if (position >= 0 && position < loopValues.length && webView != null) {
+                        String selectedMode = loopValues[position];
+                        webView.evaluateJavascript("if(typeof window.__gachaSetLoopMode==='function'){ window.__gachaSetLoopMode('" + selectedMode + "'); }", null);
+                    }
+                }
+
+                @Override
+                public void onNothingSelected(AdapterView<?> parent) {}
+            });
+        }
 
         TextView tvQueueHeader = view.findViewById(R.id.tv_jukebox_queue_header);
         View btnClearQueue = view.findViewById(R.id.btn_jukebox_clear_queue);
