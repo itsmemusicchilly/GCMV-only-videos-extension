@@ -62,6 +62,11 @@
     .room-input { flex: 1; height: 40px; background: #211a3e; border: 1px solid rgba(0,229,255,0.3); border-radius: 10px; padding: 0 10px; color: #00ffaa; font-weight: 700; font-family: monospace; font-size: 15px; text-transform: uppercase; outline: none; }
     .btn-room { height: 40px; padding: 0 14px; border: none; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; background: var(--pink); color: #fff; }
     .hidden { display: none !important; }
+    /* PIN Modal */
+    .pin-overlay { position: fixed; inset: 0; background: rgba(13,10,26,0.96); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+    .pin-card { background: var(--card-bg); border: 1px solid var(--pink); border-radius: 20px; padding: 24px; width: 100%; max-width: 320px; text-align: center; }
+    .pin-input { width: 100%; height: 50px; font-size: 24px; text-align: center; letter-spacing: 8px; background: #211a3e; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; color: #fff; margin: 14px 0; outline: none; }
+    .pin-btn { width: 100%; height: 46px; background: var(--pink); color: #fff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -145,6 +150,16 @@
 
   <div id="toast" class="toast"></div>
 
+  <!-- PIN Modal -->
+  <div id="pinOverlay" class="pin-overlay hidden">
+    <div class="pin-card">
+      <h2 style="font-size:18px; margin-bottom:6px; color:#fff;">🔒 Remote PIN Required</h2>
+      <p style="font-size:12px; color:var(--subtext); margin-bottom:12px;">Enter the 4-digit PIN configured in Player Settings</p>
+      <input type="password" id="pinInput" class="pin-input" maxlength="8" placeholder="••••" autocomplete="off">
+      <button id="btnSubmitPin" class="pin-btn">Unlock Remote</button>
+    </div>
+  </div>
+
   <!-- Client Libraries -->
   <script src="paho-mqtt-min.js"></script>
   <script src="peerjs.min.js"></script>
@@ -156,6 +171,9 @@
     let isPlaying = false;
     let isConnected = false;
     let reconnectTimeout = null;
+    let currentPin = localStorage.getItem("gcmv_remote_pin") || "";
+    let hostRequiresPin = false;
+    let pinAuthenticated = false;
 
     function showToast(msg) {
       const t = document.getElementById("toast");
@@ -190,10 +208,16 @@
       const hintEl = document.getElementById("roomHint");
       if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}!</span>`;
       showToast(`🟢 Connected to Room ${cleanCode}!`);
+      if (currentPin) {
+        sendCommand({ action: "auth_pin", pin: currentPin });
+      }
     }
 
     function sendCommand(cmd) {
       let sent = false;
+      if (cmd && currentPin) {
+        cmd.pin = currentPin;
+      }
 
       // 1. Send via MQTT WebSocket
       if (mqttClient && mqttClient.isConnected()) {
@@ -356,6 +380,17 @@
       if (!data) return;
 
       if (data.type === "STATE") {
+        if (data.pinRequired) {
+          hostRequiresPin = true;
+          if (!pinAuthenticated && !currentPin) {
+            document.getElementById("pinOverlay").classList.remove("hidden");
+          }
+        } else {
+          hostRequiresPin = false;
+          pinAuthenticated = true;
+          document.getElementById("pinOverlay").classList.add("hidden");
+        }
+
         if (data.currentVideo) {
           document.getElementById("nowPlayingTitle").textContent = data.currentVideo.title || "Playing video";
           const cur = formatTime(data.currentVideo.currentTime);
@@ -378,6 +413,16 @@
         }
 
         renderQueue(data.queue || []);
+      } else if (data.type === "PIN_ERROR" || data.type === "AUTH_ERROR") {
+        showToast("❌ Incorrect PIN. Please try again.");
+        pinAuthenticated = false;
+        document.getElementById("pinOverlay").classList.remove("hidden");
+        const pInput = document.getElementById("pinInput");
+        if (pInput) { pInput.value = ""; pInput.focus(); }
+      } else if (data.type === "PIN_OK") {
+        pinAuthenticated = true;
+        document.getElementById("pinOverlay").classList.add("hidden");
+        showToast("🔓 Remote unlocked!");
       } else if (data.type === "SEARCH_RESULTS") {
         renderSearchResults(data.results || []);
       } else if (data.type === "TOAST") {
@@ -443,6 +488,24 @@
     };
 
     // UI Event Listeners
+    const btnSubmitPin = document.getElementById("btnSubmitPin");
+    if (btnSubmitPin) {
+      btnSubmitPin.addEventListener("click", () => {
+        const pin = (document.getElementById("pinInput").value || "").trim();
+        if (!pin) return showToast("⚠️ Enter 4-digit PIN");
+        currentPin = pin;
+        localStorage.setItem("gcmv_remote_pin", pin);
+        sendCommand({ action: "auth_pin", pin: currentPin });
+      });
+    }
+
+    const pinInput = document.getElementById("pinInput");
+    if (pinInput) {
+      pinInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && btnSubmitPin) btnSubmitPin.click();
+      });
+    }
+
     document.getElementById("btnConnectRoom").addEventListener("click", () => {
       const code = document.getElementById("inputRoomCode").value;
       connectToRoom(code);
