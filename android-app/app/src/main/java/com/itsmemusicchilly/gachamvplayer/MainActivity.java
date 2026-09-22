@@ -58,6 +58,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -86,12 +87,50 @@ public class MainActivity extends AppCompatActivity {
     private boolean wasFullscreenBeforeNavigate = false;
 
     private String polyfillJs = "";
+    private String pahoJs = "";
+    private String peerJs = "";
+    private String qrcodeJs = "";
     private String contentCss = "";
     private String contentJs = "";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private BottomSheetDialog settingsDialog = null;
     private RemoteServerManager remoteServerManager = null;
+
+    public static String createRandomRoomCode() {
+        String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        StringBuilder sb = new StringBuilder("GCMV-");
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        for (int i = 0; i < 4; i++) {
+            sb.append(chars.charAt(rng.nextInt(chars.length())));
+        }
+        return sb.toString();
+    }
+
+    public String getOrGenerateRoomCode() {
+        android.content.SharedPreferences sp = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
+        String code = sp.getString("cloudRoomCode", "");
+        if (code == null || code.trim().isEmpty()) {
+            code = createRandomRoomCode();
+            sp.edit().putString("cloudRoomCode", code).apply();
+            syncSettingToWebView("cloudRoomCode", code);
+        }
+        return code.trim().toUpperCase(Locale.US);
+    }
+
+    public void saveRoomCode(String newCode) {
+        if (newCode == null || newCode.trim().isEmpty()) return;
+        String sanitized = newCode.trim().toUpperCase(Locale.US);
+        if (!sanitized.startsWith("GCMV-")) {
+            sanitized = "GCMV-" + sanitized.replace("-", "");
+        }
+        getSharedPreferences("gacha_prefs", MODE_PRIVATE).edit().putString("cloudRoomCode", sanitized).apply();
+        syncSettingToWebView("cloudRoomCode", sanitized);
+    }
+
+    public String getCloudRemoteUrl() {
+        return "https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=" + getOrGenerateRoomCode();
+    }
 
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     @Override
@@ -170,8 +209,11 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        boolean remoteEnabled = getSharedPreferences("gacha_prefs", MODE_PRIVATE).getBoolean("remoteServerEnabled", true);
-        if (remoteEnabled) {
+        android.content.SharedPreferences spInit = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
+        getOrGenerateRoomCode();
+        boolean remoteEnabled = spInit.getBoolean("remoteServerEnabled", true);
+        boolean localEnabled = spInit.getBoolean("localServerEnabled", false);
+        if (remoteEnabled && localEnabled) {
             remoteServerManager.start(8080);
         }
     }
@@ -323,8 +365,20 @@ public class MainActivity extends AppCompatActivity {
 
         com.google.android.material.switchmaterial.SwitchMaterial swRemote = view.findViewById(R.id.switch_remote_server);
         LinearLayout layoutRemoteDetails = view.findViewById(R.id.layout_remote_details);
+        LinearLayout layoutRoomCodeCard = view.findViewById(R.id.layout_room_code_card);
+        TextView tvRemoteRoomCode = view.findViewById(R.id.tv_remote_room_code);
+        View btnRegenerateRoomCode = view.findViewById(R.id.btn_regenerate_room_code);
+        View btnEditRoomCode = view.findViewById(R.id.btn_edit_room_code);
         TextView tvRemoteUrl = view.findViewById(R.id.tv_remote_server_url);
         View btnCopyRemoteUrl = view.findViewById(R.id.btn_copy_remote_url);
+        com.google.android.material.button.MaterialButton btnModeCloud = view.findViewById(R.id.btn_mode_cloud);
+        com.google.android.material.button.MaterialButton btnModeLocal = view.findViewById(R.id.btn_mode_local);
+        LinearLayout layoutLocalIpDetails = view.findViewById(R.id.layout_local_ip_details);
+        ImageView ivRemoteQr = view.findViewById(R.id.iv_remote_qr);
+        View layoutRemoteQr = view.findViewById(R.id.layout_remote_qr);
+        TextView tvRemoteQrHint = view.findViewById(R.id.tv_remote_qr_hint);
+        android.widget.HorizontalScrollView scrollIpChips = view.findViewById(R.id.scroll_remote_ip_chips);
+        LinearLayout layoutIpChips = view.findViewById(R.id.layout_remote_ip_chips);
         com.google.android.material.switchmaterial.SwitchMaterial swRemotePin = view.findViewById(R.id.switch_remote_pin);
         LinearLayout layoutPinInput = view.findViewById(R.id.layout_pin_input);
         EditText etRemotePin = view.findViewById(R.id.et_remote_pin);
@@ -358,6 +412,7 @@ public class MainActivity extends AppCompatActivity {
         String nasToken = sp.getString("nasAuthToken", "");
         boolean nasAutoSync = sp.getBoolean("nasAutoSync", false);
         boolean remoteEnabled = sp.getBoolean("remoteServerEnabled", true);
+        boolean localEnabled = sp.getBoolean("localServerEnabled", false);
         boolean remotePinEnabled = sp.getBoolean("remotePinEnabled", false);
         String remotePin = sp.getString("remotePin", "1234");
         boolean showBottomLeftQr = sp.getBoolean("showBottomLeftQr", sp.getBoolean("showBottomRightQr", false));
@@ -386,75 +441,106 @@ public class MainActivity extends AppCompatActivity {
         if (etNasToken != null) etNasToken.setText(nasToken);
         if (swNasAutoSync != null) swNasAutoSync.setChecked(nasAutoSync);
 
-        ImageView ivRemoteQr = view.findViewById(R.id.iv_remote_qr);
-        View layoutRemoteQr = view.findViewById(R.id.layout_remote_qr);
-        android.widget.HorizontalScrollView scrollIpChips = view.findViewById(R.id.scroll_remote_ip_chips);
-        LinearLayout layoutIpChips = view.findViewById(R.id.layout_remote_ip_chips);
-        final String[] activeUrlHolder = new String[] { remoteServerManager != null ? remoteServerManager.getServerUrl() : "http://127.0.0.1:8080/remote" };
+        final String[] currentMode = new String[] { localEnabled ? "local" : "cloud" };
+        final String[] activeUrlHolder = new String[] { "cloud".equals(currentMode[0]) ? getCloudRemoteUrl() : (remoteServerManager != null ? remoteServerManager.getServerUrl() : "http://127.0.0.1:8080/remote") };
 
         Runnable refreshRemoteUi = () -> {
-            if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                List<RemoteServerManager.NetworkAddressInfo> addrs = remoteServerManager.getAvailableIpAddresses();
-                int port = remoteServerManager.getPort();
+            boolean isCloud = "cloud".equals(currentMode[0]);
+            if (btnModeCloud != null) {
+                btnModeCloud.setBackgroundTintList(android.content.res.ColorStateList.valueOf(isCloud ? 0xFFFF2E93 : 0xFF211A3E));
+                btnModeCloud.setTextColor(isCloud ? 0xFFFFFFFF : 0xFFA09BB8);
+            }
+            if (btnModeLocal != null) {
+                btnModeLocal.setBackgroundTintList(android.content.res.ColorStateList.valueOf(!isCloud ? 0xFFFF2E93 : 0xFF211A3E));
+                btnModeLocal.setTextColor(!isCloud ? 0xFFFFFFFF : 0xFFA09BB8);
+            }
 
-                if (layoutIpChips != null && scrollIpChips != null) {
-                    layoutIpChips.removeAllViews();
-                    if (addrs.size() > 1) {
-                        scrollIpChips.setVisibility(View.VISIBLE);
-                        for (RemoteServerManager.NetworkAddressInfo info : addrs) {
-                            com.google.android.material.button.MaterialButton chip = new com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle);
-                            String icon = "tailscale".equals(info.type) ? "🔒" : "wifi".equals(info.type) ? "📶" : "ethernet".equals(info.type) ? "🌐" : "📱";
-                            chip.setText(icon + " " + info.name + ": " + info.ip);
-                            chip.setTextSize(11f);
-                            chip.setAllCaps(false);
-                            chip.setCornerRadius((int) (12 * getResources().getDisplayMetrics().density));
-                            chip.setPadding(24, 8, 24, 8);
-                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                                    (int) (32 * getResources().getDisplayMetrics().density));
-                            lp.setMargins(0, 0, (int) (8 * getResources().getDisplayMetrics().density), 0);
-                            chip.setLayoutParams(lp);
-
-                            boolean isCurrent = activeUrlHolder[0].contains(info.ip);
-                            chip.setBackgroundTintList(android.content.res.ColorStateList.valueOf(isCurrent ? 0xFF6B21A8 : 0xFF211A3E));
-                            chip.setTextColor(isCurrent ? 0xFF00FFAA : 0xFFC5C0D8);
-
-                            chip.setOnClickListener(cv -> {
-                                activeUrlHolder[0] = "http://" + info.ip + ":" + port + "/remote";
-                                if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
-                                if (ivRemoteQr != null) {
-                                    Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
-                                    if (bmp != null) ivRemoteQr.setImageBitmap(bmp);
-                                }
-                                for (int i = 0; i < layoutIpChips.getChildCount(); i++) {
-                                    View child = layoutIpChips.getChildAt(i);
-                                    if (child instanceof com.google.android.material.button.MaterialButton) {
-                                        boolean sel = child == cv;
-                                        ((com.google.android.material.button.MaterialButton) child).setBackgroundTintList(
-                                                android.content.res.ColorStateList.valueOf(sel ? 0xFF6B21A8 : 0xFF211A3E));
-                                        ((com.google.android.material.button.MaterialButton) child).setTextColor(sel ? 0xFF00FFAA : 0xFFC5C0D8);
-                                    }
-                                }
-                            });
-                            layoutIpChips.addView(chip);
-                        }
-                    } else {
-                        scrollIpChips.setVisibility(View.GONE);
-                    }
-                }
-
+            if (isCloud) {
+                if (layoutLocalIpDetails != null) layoutLocalIpDetails.setVisibility(View.GONE);
+                if (layoutRoomCodeCard != null) layoutRoomCodeCard.setVisibility(View.VISIBLE);
+                String code = getOrGenerateRoomCode();
+                if (tvRemoteRoomCode != null) tvRemoteRoomCode.setText(code);
+                activeUrlHolder[0] = getCloudRemoteUrl();
                 if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
                 if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.VISIBLE);
                 if (ivRemoteQr != null) {
                     Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
-                    if (bmp != null) {
-                        ivRemoteQr.setImageBitmap(bmp);
-                    }
+                    if (bmp != null) ivRemoteQr.setImageBitmap(bmp);
+                }
+                if (tvRemoteQrHint != null) {
+                    tvRemoteQrHint.setText("📷 Scan with any phone camera to control instantly (no IP or same Wi-Fi required!)");
                 }
             } else {
-                if (tvRemoteUrl != null) tvRemoteUrl.setText("Server Stopped");
-                if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.GONE);
-                if (scrollIpChips != null) scrollIpChips.setVisibility(View.GONE);
+                if (layoutLocalIpDetails != null) layoutLocalIpDetails.setVisibility(View.VISIBLE);
+                if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                    List<RemoteServerManager.NetworkAddressInfo> addrs = remoteServerManager.getAvailableIpAddresses();
+                    int port = remoteServerManager.getPort();
+
+                    if (layoutIpChips != null && scrollIpChips != null) {
+                        layoutIpChips.removeAllViews();
+                        if (addrs.size() > 1) {
+                            scrollIpChips.setVisibility(View.VISIBLE);
+                            for (RemoteServerManager.NetworkAddressInfo info : addrs) {
+                                com.google.android.material.button.MaterialButton chip = new com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle);
+                                String icon = "tailscale".equals(info.type) ? "🔒" : "wifi".equals(info.type) ? "📶" : "ethernet".equals(info.type) ? "🌐" : "📱";
+                                chip.setText(icon + " " + info.name + ": " + info.ip);
+                                chip.setTextSize(11f);
+                                chip.setAllCaps(false);
+                                chip.setCornerRadius((int) (12 * getResources().getDisplayMetrics().density));
+                                chip.setPadding(24, 8, 24, 8);
+                                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                                        (int) (32 * getResources().getDisplayMetrics().density));
+                                lp.setMargins(0, 0, (int) (8 * getResources().getDisplayMetrics().density), 0);
+                                chip.setLayoutParams(lp);
+
+                                boolean isCurrent = activeUrlHolder[0].contains(info.ip);
+                                chip.setBackgroundTintList(android.content.res.ColorStateList.valueOf(isCurrent ? 0xFF6B21A8 : 0xFF211A3E));
+                                chip.setTextColor(isCurrent ? 0xFF00FFAA : 0xFFC5C0D8);
+
+                                chip.setOnClickListener(cv -> {
+                                    activeUrlHolder[0] = "http://" + info.ip + ":" + port + "/remote";
+                                    if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
+                                    if (ivRemoteQr != null) {
+                                        Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
+                                        if (bmp != null) ivRemoteQr.setImageBitmap(bmp);
+                                    }
+                                    for (int i = 0; i < layoutIpChips.getChildCount(); i++) {
+                                        View child = layoutIpChips.getChildAt(i);
+                                        if (child instanceof com.google.android.material.button.MaterialButton) {
+                                            boolean sel = child == cv;
+                                            ((com.google.android.material.button.MaterialButton) child).setBackgroundTintList(
+                                                    android.content.res.ColorStateList.valueOf(sel ? 0xFF6B21A8 : 0xFF211A3E));
+                                            ((com.google.android.material.button.MaterialButton) child).setTextColor(sel ? 0xFF00FFAA : 0xFFC5C0D8);
+                                        }
+                                    }
+                                });
+                                layoutIpChips.addView(chip);
+                            }
+                        } else {
+                            scrollIpChips.setVisibility(View.GONE);
+                        }
+                    }
+
+                    if (activeUrlHolder[0].contains("github.io") || activeUrlHolder[0].contains("Stopped")) {
+                        activeUrlHolder[0] = remoteServerManager.getServerUrl();
+                    }
+                    if (tvRemoteUrl != null) tvRemoteUrl.setText(activeUrlHolder[0]);
+                    if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.VISIBLE);
+                    if (ivRemoteQr != null) {
+                        Bitmap bmp = QRCodeUtil.generateQrBitmap(activeUrlHolder[0], 400, 400);
+                        if (bmp != null) {
+                            ivRemoteQr.setImageBitmap(bmp);
+                        }
+                    }
+                    if (tvRemoteQrHint != null) {
+                        tvRemoteQrHint.setText("📷 Scan with phone on same Wi-Fi to open local remote control");
+                    }
+                } else {
+                    if (tvRemoteUrl != null) tvRemoteUrl.setText("Local Server Stopped");
+                    if (layoutRemoteQr != null) layoutRemoteQr.setVisibility(View.GONE);
+                    if (scrollIpChips != null) scrollIpChips.setVisibility(View.GONE);
+                }
             }
         };
 
@@ -462,9 +548,81 @@ public class MainActivity extends AppCompatActivity {
         if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(remoteEnabled ? View.VISIBLE : View.GONE);
         refreshRemoteUi.run();
 
+        if (btnModeCloud != null) {
+            btnModeCloud.setOnClickListener(v -> {
+                currentMode[0] = "cloud";
+                sp.edit().putBoolean("localServerEnabled", false).apply();
+                syncSettingToWebView("localServerEnabled", false);
+                if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                    remoteServerManager.stop();
+                }
+                refreshRemoteUi.run();
+            });
+        }
+
+        if (btnModeLocal != null) {
+            btnModeLocal.setOnClickListener(v -> {
+                currentMode[0] = "local";
+                sp.edit().putBoolean("localServerEnabled", true).apply();
+                syncSettingToWebView("localServerEnabled", true);
+                if (remoteServerManager != null && !remoteServerManager.isRunning()) {
+                    remoteServerManager.start(8080);
+                    mainHandler.postDelayed(refreshRemoteUi::run, 400);
+                } else {
+                    refreshRemoteUi.run();
+                }
+            });
+        }
+
+        if (btnRegenerateRoomCode != null) {
+            btnRegenerateRoomCode.setOnClickListener(v -> {
+                String newCode = createRandomRoomCode();
+                saveRoomCode(newCode);
+                refreshRemoteUi.run();
+                Toast.makeText(this, "🌸 Generated new Room Code: " + newCode, Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        if (btnEditRoomCode != null) {
+            btnEditRoomCode.setOnClickListener(v -> {
+                android.widget.EditText inputEt = new android.widget.EditText(this);
+                inputEt.setText(getOrGenerateRoomCode());
+                inputEt.setSingleLine(true);
+                inputEt.setTextColor(0xFF00FFAA);
+                inputEt.setFilters(new android.text.InputFilter[]{ new android.text.InputFilter.LengthFilter(16) });
+                inputEt.setPadding(40, 30, 40, 30);
+
+                new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                        .setTitle("✏️ Set Custom Room Code")
+                        .setMessage("Enter a custom room name or code (e.g. GCMV-PARTY or CHILLY):")
+                        .setView(inputEt)
+                        .setPositiveButton("Save", (d, w) -> {
+                            String input = inputEt.getText().toString().trim();
+                            if (!input.isEmpty()) {
+                                saveRoomCode(input);
+                                refreshRemoteUi.run();
+                                Toast.makeText(this, "🌸 Room Code set to: " + getOrGenerateRoomCode(), Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+        }
+
+        if (tvRemoteRoomCode != null) {
+            tvRemoteRoomCode.setOnClickListener(v -> {
+                String code = getOrGenerateRoomCode();
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Room Code", code));
+                    Toast.makeText(this, "📋 Room Code copied: " + code, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
         View.OnClickListener copyUrlListener = v -> {
-            if (remoteServerManager != null && remoteServerManager.isRunning()) {
-                String url = activeUrlHolder[0];
+            String url = activeUrlHolder[0];
+            if (url != null && !url.isEmpty() && !url.contains("Stopped")) {
                 android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) {
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("Remote Control URL", url));
@@ -571,11 +729,13 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swRemote, "remoteServerEnabled", isChecked -> {
             if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(isChecked ? View.VISIBLE : View.GONE);
             if (isChecked) {
-                if (remoteServerManager != null && !remoteServerManager.isRunning()) {
-                    remoteServerManager.start(8080);
-                    mainHandler.postDelayed(() -> {
+                if ("local".equals(currentMode[0])) {
+                    if (remoteServerManager != null && !remoteServerManager.isRunning()) {
+                        remoteServerManager.start(8080);
+                        mainHandler.postDelayed(refreshRemoteUi::run, 400);
+                    } else {
                         refreshRemoteUi.run();
-                    }, 500);
+                    }
                 } else {
                     refreshRemoteUi.run();
                 }
@@ -816,7 +976,7 @@ public class MainActivity extends AppCompatActivity {
             "enabled", "showJukebox", "showSearchChips", "blockAds", "autoSkipNonGacha",
             "autoplayGuard", "autoUnmute", "smoothPlayback", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
             "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
-            "useNasServer", "nasAutoSync", "remoteServerEnabled", "remotePinEnabled",
+            "useNasServer", "nasAutoSync", "remoteServerEnabled", "localServerEnabled", "remotePinEnabled",
             "showBottomLeftQr", "showBottomRightQr", "showQrInFullscreen"
     ));
 
@@ -1092,6 +1252,9 @@ public class MainActivity extends AppCompatActivity {
     private void loadExtensionAssets() {
         try {
             polyfillJs = readAssetFile("extension/chrome_polyfill.js");
+            qrcodeJs = readAssetFile("extension/qrcode.min.js");
+            pahoJs = readAssetFile("extension/paho-mqtt-min.js");
+            peerJs = readAssetFile("extension/peerjs.min.js");
             contentCss = readAssetFile("extension/content.css");
             contentJs = readAssetFile("extension/content.js");
             Log.d(TAG, "Extension assets loaded. CSS len=" + contentCss.length() + ", JS len=" + contentJs.length());
@@ -1285,6 +1448,19 @@ public class MainActivity extends AppCompatActivity {
         // 2. Inject Polyfill
         if (polyfillJs != null && !polyfillJs.isEmpty()) {
             view.evaluateJavascript(polyfillJs, null);
+        }
+
+        // 2b. Inject QR Code generator
+        if (qrcodeJs != null && !qrcodeJs.isEmpty()) {
+            view.evaluateJavascript(qrcodeJs, null);
+        }
+
+        // 2c. Inject MQTT / Paho & PeerJS for Cloud Room Pairing
+        if (pahoJs != null && !pahoJs.isEmpty()) {
+            view.evaluateJavascript(pahoJs, null);
+        }
+        if (peerJs != null && !peerJs.isEmpty()) {
+            view.evaluateJavascript(peerJs, null);
         }
 
         // 3. Inject CSS
@@ -1640,6 +1816,56 @@ public class MainActivity extends AppCompatActivity {
             if (remoteServerManager != null) {
                 remoteServerManager.removeQueueItem(id);
             }
+        }
+
+        @JavascriptInterface
+        public void addVideoToQueue(String videoId, String title, String action) {
+            if (remoteServerManager != null) {
+                remoteServerManager.addVideoToQueue(videoId, title, action);
+            }
+        }
+
+        @JavascriptInterface
+        public String getCloudRoomCode() {
+            return getOrGenerateRoomCode();
+        }
+
+        @JavascriptInterface
+        public void setCloudRoomCode(String code) {
+            mainHandler.post(() -> saveRoomCode(code));
+        }
+
+        @JavascriptInterface
+        public String generateNewRoomCode() {
+            String code = createRandomRoomCode();
+            saveRoomCode(code);
+            return code;
+        }
+
+        @JavascriptInterface
+        public String getCloudRemoteUrl() {
+            return MainActivity.this.getCloudRemoteUrl();
+        }
+
+        @JavascriptInterface
+        public boolean isLocalServerEnabled() {
+            return getSharedPreferences("gacha_prefs", MODE_PRIVATE).getBoolean("localServerEnabled", false);
+        }
+
+        @JavascriptInterface
+        public void setLocalServerEnabled(boolean enabled) {
+            getSharedPreferences("gacha_prefs", MODE_PRIVATE).edit().putBoolean("localServerEnabled", enabled).apply();
+            mainHandler.post(() -> {
+                if (enabled) {
+                    if (remoteServerManager != null && !remoteServerManager.isRunning()) {
+                        remoteServerManager.start(8080);
+                    }
+                } else {
+                    if (remoteServerManager != null && remoteServerManager.isRunning()) {
+                        remoteServerManager.stop();
+                    }
+                }
+            });
         }
     }
 }

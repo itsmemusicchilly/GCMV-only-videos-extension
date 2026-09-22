@@ -901,7 +901,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Enable Local Wi-Fi Web Remote"
+                    android:text="🌸 Phone Remote Control (Room Code)"
                     android:textColor="#FFFFFF"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -909,7 +909,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Queue videos &amp; control playback from phone"
+                    android:text="Pair your phone instantly with zero IP setup"
                     android:textColor="#A09BB8"
                     android:textSize="11sp" />
             </LinearLayout>
@@ -923,7 +923,7 @@
                 app:trackTint="#7E2653" />
         </LinearLayout>
 
-        <!-- Remote Server Details (URL, Copy, PIN) -->
+        <!-- Remote Server Details (Room Code, URL, Copy, PIN) -->
         <LinearLayout
             android:id="@+id/layout_remote_details"
             android:layout_width="match_parent"
@@ -933,10 +933,73 @@
             android:padding="12dp"
             android:layout_marginBottom="10dp">
 
+            <!-- Room Code Box -->
+            <LinearLayout
+                android:id="@+id/layout_room_code_card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#120E24"
+                android:padding="10dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔑 ROOM PAIRING CODE"
+                    android:textColor="#00E5FF"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="3dp">
+
+                    <TextView
+                        android:id="@+id/tv_remote_room_code"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="GCMV-XXXX"
+                        android:textColor="#00FFAA"
+                        android:textSize="18sp"
+                        android:fontFamily="monospace"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_regenerate_room_code"
+                        style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="32dp"
+                        android:backgroundTint="#2E1B4E"
+                        android:text="🔄 New"
+                        android:textAllCaps="false"
+                        android:textColor="#FF2E93"
+                        android:textSize="11sp"
+                        android:layout_marginEnd="4dp"
+                        app:cornerRadius="16dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_edit_room_code"
+                        style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="32dp"
+                        android:backgroundTint="#2E1B4E"
+                        android:text="✏️ Edit"
+                        android:textAllCaps="false"
+                        android:textColor="#00E5FF"
+                        android:textSize="11sp"
+                        app:cornerRadius="16dp" />
+                </LinearLayout>
+            </LinearLayout>
+
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Open on your phone's browser:"
+                android:text="Web Remote Link:"
                 android:textColor="#A09BB8"
                 android:textSize="11sp" />
 
@@ -945,7 +1008,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="2dp"
                 android:layout_marginBottom="8dp">
 
                 <TextView
@@ -953,9 +1016,11 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="http://127.0.0.1:8080"
+                    android:ellipsize="middle"
+                    android:singleLine="true"
+                    android:text="https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/"
                     android:textColor="#00FFAA"
-                    android:textSize="13sp"
+                    android:textSize="11sp"
                     android:textStyle="bold" />
 
                 <com.google.android.material.button.MaterialButton
@@ -971,22 +1036,72 @@
                     app:cornerRadius="16dp" />
             </LinearLayout>
 
-            <!-- Multi-IP Network Chips (WiFi, Tailscale, etc.) -->
-            <HorizontalScrollView
-                android:id="@+id/scroll_remote_ip_chips"
+            <!-- Mode Selector Chips (Cloud Room vs Local Wi-Fi) -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:scrollbars="none"
-                android:layout_marginTop="2dp"
-                android:layout_marginBottom="8dp"
-                android:visibility="gone">
+                android:orientation="horizontal"
+                android:layout_marginBottom="8dp">
 
-                <LinearLayout
-                    android:id="@+id/layout_remote_ip_chips"
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_mode_cloud"
+                    style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="34dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:backgroundTint="#FF2E93"
+                    android:text="🔑 Cloud Room"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    app:cornerRadius="14dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_mode_local"
+                    style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="34dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#211A3E"
+                    android:text="📶 Local Wi-Fi IP"
+                    android:textAllCaps="false"
+                    android:textColor="#A09BB8"
+                    android:textSize="11sp"
+                    app:cornerRadius="14dp" />
+            </LinearLayout>
+
+            <!-- Local Wi-Fi IP Container -->
+            <LinearLayout
+                android:id="@+id/layout_local_ip_details"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone"
+                android:layout_marginBottom="8dp">
+
+                <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal" />
-            </HorizontalScrollView>
+                    android:text="Offline Local Wi-Fi IP:"
+                    android:textColor="#A09BB8"
+                    android:textSize="10sp" />
+
+                <HorizontalScrollView
+                    android:id="@+id/scroll_remote_ip_chips"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:scrollbars="none"
+                    android:layout_marginTop="2dp">
+
+                    <LinearLayout
+                        android:id="@+id/layout_remote_ip_chips"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+            </LinearLayout>
 
             <!-- QR Code Section -->
             <LinearLayout
@@ -1009,10 +1124,11 @@
                     android:contentDescription="Remote QR Code" />
 
                 <TextView
+                    android:id="@+id/tv_remote_qr_hint"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="📷 Scan with your phone camera"
+                    android:text="📷 Scan with your phone to open Remote Control"
                     android:textColor="#C5C0D8"
                     android:textSize="11sp" />
             </LinearLayout>

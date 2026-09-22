@@ -2,7 +2,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ANDROID_HOME="${ANDROID_HOME:-$HOME/.android-sdk}"
+if [ -d "/home/itsmemusicchilly/.android-sdk" ]; then
+    export ANDROID_HOME="/home/itsmemusicchilly/.android-sdk"
+else
+    export ANDROID_HOME="${ANDROID_HOME:-$HOME/.android-sdk}"
+fi
 export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}"
 export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
@@ -32,7 +36,11 @@ cd "$SCRIPT_DIR/android-app"
 # 3. Re-sign with v1 + v2 so cheap Android TV boxes / emulators can install
 APK_SRC="$SCRIPT_DIR/android-app/app/build/outputs/apk/release/app-release.apk"
 APK_DEST="$SCRIPT_DIR/GachaMVPlayer-YouTube.apk"
-DEBUG_KEYSTORE="${DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+if [ -f "/home/itsmemusicchilly/.android/debug.keystore" ]; then
+    DEBUG_KEYSTORE="/home/itsmemusicchilly/.android/debug.keystore"
+else
+    DEBUG_KEYSTORE="${DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+fi
 BUILD_TOOLS_DIR="$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
 APKSIGNER="${BUILD_TOOLS_DIR}apksigner"
 ZIPALIGN="${BUILD_TOOLS_DIR}zipalign"

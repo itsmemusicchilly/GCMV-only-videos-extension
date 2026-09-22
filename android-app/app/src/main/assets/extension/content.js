@@ -2956,6 +2956,38 @@
     navigateToVideo(track.videoId, track.title || "", false);
   }
 
+  function dispatchMainWorldPlayerAction(action, param = "") {
+    try {
+      const nonceEl = document.querySelector("script[nonce]");
+      const s = document.createElement("script");
+      if (nonceEl) {
+        const nonceVal = nonceEl.nonce || nonceEl.getAttribute("nonce");
+        if (nonceVal) s.setAttribute("nonce", nonceVal);
+      }
+      if (action === "next") {
+        s.textContent = `(function() {
+          try {
+            const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+            if (p && typeof p.nextVideo === 'function') { p.nextVideo(); }
+          } catch (_) {}
+        })();`;
+      } else if (action === "loadVideoById" && param) {
+        const sanitized = String(param).replace(/[^a-zA-Z0-9_-]/g, "");
+        s.textContent = `(function() {
+          try {
+            const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+            if (p && typeof p.loadVideoById === 'function') {
+              p.loadVideoById('${sanitized}');
+              p.playVideo?.();
+            }
+          } catch (_) {}
+        })();`;
+      }
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();
+    } catch (_) {}
+  }
+
   async function executeSkipNextTrack(triggerSource = "user_skip") {
     // 1. If currently in a loop mode, break out of loop on explicit skip
     if (currentLoopMode !== "off") {
@@ -3043,7 +3075,8 @@
       } catch (_) {}
     }
 
-    // 7. Try YouTube player's movie_player API if present
+    // 7. Try YouTube player's movie_player API directly and via main world injection
+    dispatchMainWorldPlayerAction("next");
     const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
     if (moviePlayer && typeof moviePlayer.nextVideo === "function") {
       try {
@@ -3106,32 +3139,34 @@
               if (getCurrentVideoId() === initialVid) {
                 if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
                   window.AndroidBridge.loadUrl(nextEl.href);
-                } else {
+                } else if (!isPlayerMediaFullscreen()) {
+                  // Only fall back to hard reload when NOT in player fullscreen to preserve fullscreen mode
                   window.location.href = nextEl.href;
                 }
               }
-            }, 600);
+            }, 2500);
           }
         }
       }
     }
 
-    // 10. Verification and fallback if still on same video after 650ms
+    // 10. Verification and fallback if still on same video after 2500ms
     setTimeout(() => {
       const currentVid = getCurrentVideoId();
       if (currentVid === initialVid) {
         const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
         if (video && !isNaN(video.duration) && video.duration > 0 && video.currentTime < video.duration - 0.5) {
           try {
+            // Nudge to end of track to trigger seamless in-player autoplay transition without reload
             video.currentTime = Math.max(0, video.duration - 0.2);
             video.play().catch(() => {});
           } catch (_) {}
-        } else {
+        } else if (!isPlayerMediaFullscreen() && !window.AndroidBridge) {
           checkAndEnforceGachaNext("autoplay_guard");
         }
       }
       setTimeout(broadcastCloudState, 1000);
-    }, 650);
+    }, 2500);
   }
 
   let isHandlingQueueTransition = false;
@@ -3219,6 +3254,7 @@
   let cloudConnections = [];
   let cloudRoomCode = "";
   let cloudRemoteQueue = [];
+  let cloudMqttClient = null;
 
   function generateRoomCode() {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -3250,8 +3286,25 @@
       volume,
       loopMode: currentLoopMode,
       queue: cloudRemoteQueue,
-      roomCode: cloudRoomCode
+      roomCode: cloudRoomCode,
+      pinRequired: Boolean(settings.remotePinEnabled)
     };
+  }
+
+  function broadcastCloudMqttMessage(obj) {
+    if (!cloudMqttClient || !cloudMqttClient.isConnected()) return;
+    try {
+      const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
+      if (!PahoLib || !PahoLib.MQTT) return;
+      const cleanCode = (cloudRoomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!cleanCode) return;
+      const msg = new PahoLib.MQTT.Message(JSON.stringify(obj));
+      msg.destinationName = `gcmv/room/${cleanCode}/state`;
+      msg.retained = (obj.type === "STATE");
+      cloudMqttClient.send(msg);
+    } catch (e) {
+      console.warn("[GCMV] broadcastCloudMqttMessage error:", e);
+    }
   }
 
   function sendCloudStateToPeer(conn) {
@@ -3263,13 +3316,15 @@
   }
 
   function broadcastCloudState() {
-    if (cloudConnections.length === 0) return;
     const state = getPlaybackStateObject();
-    cloudConnections.forEach(conn => {
-      if (conn && conn.open) {
-        try { conn.send(state); } catch (_) {}
-      }
-    });
+    if (cloudConnections.length > 0) {
+      cloudConnections.forEach(conn => {
+        if (conn && conn.open) {
+          try { conn.send(state); } catch (_) {}
+        }
+      });
+    }
+    broadcastCloudMqttMessage(state);
   }
 
   async function performYouTubeSearch(query) {
@@ -3355,9 +3410,37 @@
     if (!data || typeof data !== "object") return;
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
 
+    // PIN Validation
+    const pinRequired = Boolean(settings.remotePinEnabled);
+    const configuredPin = (settings.remotePin || "1234").trim();
+    if (pinRequired && data.action !== "get_state") {
+      const clientPin = (data.pin != null ? String(data.pin) : "").trim();
+      if (clientPin !== configuredPin) {
+        if (conn && conn.open) {
+          try { conn.send({ type: "PIN_ERROR", message: "PIN required or invalid" }); } catch (_) {}
+        }
+        broadcastCloudMqttMessage({ type: "PIN_ERROR", message: "PIN required or invalid" });
+        return;
+      }
+      if (data.action === "auth_pin") {
+        if (conn && conn.open) {
+          try { conn.send({ type: "PIN_OK" }); } catch (_) {}
+        }
+        broadcastCloudMqttMessage({ type: "PIN_OK" });
+        return;
+      }
+    } else if (data.action === "auth_pin") {
+      if (conn && conn.open) {
+        try { conn.send({ type: "PIN_OK" }); } catch (_) {}
+      }
+      broadcastCloudMqttMessage({ type: "PIN_OK" });
+      return;
+    }
+
     switch (data.action) {
       case "get_state":
         sendCloudStateToPeer(conn);
+        broadcastCloudState();
         break;
 
       case "play":
@@ -3404,8 +3487,12 @@
 
       case "play_now":
         if (data.videoId) {
-          captureCurrentMixState();
-          navigateToVideo(data.videoId, data.title || "", true);
+          if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+            window.AndroidBridge.loadUrl("https://m.youtube.com/watch?v=" + data.videoId);
+          } else {
+            captureCurrentMixState();
+            navigateToVideo(data.videoId, data.title || "", true);
+          }
           setTimeout(broadcastCloudState, 1200);
         }
         break;
@@ -3418,6 +3505,9 @@
             title: data.title || data.videoId,
             addedAt: Date.now()
           });
+          if (window.AndroidBridge && typeof window.AndroidBridge.addVideoToQueue === "function") {
+            try { window.AndroidBridge.addVideoToQueue(data.videoId, data.title || "", "play_next"); } catch (_) {}
+          }
           await extStorage.set({ cloudRemoteQueue });
           broadcastCloudState();
           if (typeof refreshInpageQueue === "function") refreshInpageQueue();
@@ -3432,6 +3522,9 @@
             title: data.title || data.videoId,
             addedAt: Date.now()
           });
+          if (window.AndroidBridge && typeof window.AndroidBridge.addVideoToQueue === "function") {
+            try { window.AndroidBridge.addVideoToQueue(data.videoId, data.title || "", "add_queue"); } catch (_) {}
+          }
           await extStorage.set({ cloudRemoteQueue });
           broadcastCloudState();
           if (typeof refreshInpageQueue === "function") refreshInpageQueue();
@@ -3441,6 +3534,9 @@
       case "remove_queue":
         if (data.id) {
           cloudRemoteQueue = cloudRemoteQueue.filter(item => item.id !== data.id);
+          if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
+            try { window.AndroidBridge.removeQueueItem(data.id); } catch (_) {}
+          }
           await extStorage.set({ cloudRemoteQueue });
           broadcastCloudState();
           if (typeof refreshInpageQueue === "function") refreshInpageQueue();
@@ -3449,6 +3545,9 @@
 
       case "clear_queue":
         cloudRemoteQueue = [];
+        if (window.AndroidBridge && typeof window.AndroidBridge.clearQueue === "function") {
+          try { window.AndroidBridge.clearQueue(); } catch (_) {}
+        }
         await extStorage.set({ cloudRemoteQueue });
         broadcastCloudState();
         if (typeof refreshInpageQueue === "function") refreshInpageQueue();
@@ -3460,6 +3559,7 @@
           if (conn && conn.open) {
             conn.send({ type: "SEARCH_RESULTS", query: data.query, results });
           }
+          broadcastCloudMqttMessage({ type: "SEARCH_RESULTS", query: data.query, results });
           try {
             chrome.runtime.sendMessage({
               type: "GCMV_SEARCH_RESULTS",
@@ -3484,62 +3584,121 @@
     });
   } catch (_) {}
 
-  async function initCloudRemoteHost() {
-    if (typeof Peer === "undefined") {
-      console.warn("[GCMV] PeerJS library not loaded, skipping Cloud Remote Host");
+  function initCloudMqttHost() {
+    const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
+    if (!PahoLib || !PahoLib.MQTT || !PahoLib.MQTT.Client) {
+      console.warn("[GCMV] Paho MQTT not available in content script");
       return;
     }
+    const cleanCode = (cloudRoomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!cleanCode) return;
+    const clientId = "gcmv-host-" + Math.random().toString(36).substring(2, 10);
+    const cmdTopic = `gcmv/room/${cleanCode}/cmd`;
 
+    if (cloudMqttClient) {
+      try { cloudMqttClient.disconnect(); } catch (_) {}
+      cloudMqttClient = null;
+    }
+
+    try {
+      const client = new PahoLib.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
+      client.onConnectionLost = (resp) => {
+        console.warn("[GCMV] Content Cloud MQTT connection lost:", resp ? resp.errorMessage : "");
+        setTimeout(initCloudMqttHost, 6000);
+      };
+      client.onMessageArrived = (msg) => {
+        try {
+          const payload = JSON.parse(msg.payloadString);
+          handleCloudRemoteCommand(payload);
+        } catch (e) {
+          console.warn("[GCMV] Invalid MQTT command payload:", e);
+        }
+      };
+      client.connect({
+        useSSL: true,
+        timeout: 8,
+        keepAliveInterval: 30,
+        cleanSession: true,
+        onSuccess: () => {
+          console.log(`[GCMV] 🌸 Content Cloud Remote MQTT online! Room: ${cleanCode}`);
+          cloudMqttClient = client;
+          client.subscribe(cmdTopic, {
+            onSuccess: () => {
+              broadcastCloudState();
+            },
+            onFailure: (err) => console.warn("[GCMV] Failed to subscribe to cmdTopic:", err)
+          });
+        },
+        onFailure: (err) => {
+          console.warn("[GCMV] Content MQTT connection failed:", err ? err.errorMessage : "");
+          setTimeout(initCloudMqttHost, 8000);
+        }
+      });
+    } catch (e) {
+      console.warn("[GCMV] Error initializing Content MQTT host:", e);
+    }
+  }
+
+  async function initCloudRemoteHost() {
     try {
       const stored = await extStorage.get({ cloudRoomCode: "", cloudRemoteEnabled: true, cloudRemoteQueue: [] });
       if (stored.cloudRemoteEnabled === false) return;
 
-      cloudRoomCode = stored.cloudRoomCode || generateRoomCode();
-      if (!stored.cloudRoomCode) {
-        await extStorage.set({ cloudRoomCode });
+      if (window.AndroidBridge && typeof window.AndroidBridge.getCloudRoomCode === "function") {
+        const bridgeCode = window.AndroidBridge.getCloudRoomCode();
+        if (bridgeCode) cloudRoomCode = bridgeCode;
       }
+      if (!cloudRoomCode) {
+        cloudRoomCode = stored.cloudRoomCode || generateRoomCode();
+      }
+      await extStorage.set({ cloudRoomCode });
+
       if (Array.isArray(stored.cloudRemoteQueue)) {
         cloudRemoteQueue = stored.cloudRemoteQueue;
       }
 
-      const cleanCode = cloudRoomCode.toLowerCase().replace(/[^a-z0-9]/g, "");
-      const peerId = `gcmv-${cleanCode}`;
+      initCloudMqttHost();
 
-      if (cloudPeer) {
-        try { cloudPeer.destroy(); } catch (_) {}
+      if (typeof Peer !== "undefined") {
+        const cleanCode = cloudRoomCode.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const peerId = `gcmv-${cleanCode}`;
+
+        if (cloudPeer) {
+          try { cloudPeer.destroy(); } catch (_) {}
+        }
+
+        cloudPeer = new Peer(peerId);
+
+        cloudPeer.on("open", (id) => {
+          console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
+          renderBottomRightQrCode();
+        });
+
+        cloudPeer.on("connection", (conn) => {
+          cloudConnections.push(conn);
+          console.log(`[GCMV] 📱 Phone connected via Cloud P2P! (${conn.peer})`);
+
+          conn.on("open", () => {
+            sendCloudStateToPeer(conn);
+          });
+
+          conn.on("data", async (data) => {
+            handleCloudRemoteCommand(data, conn);
+          });
+
+          conn.on("close", () => {
+            cloudConnections = cloudConnections.filter(c => c !== conn);
+          });
+
+          conn.on("error", () => {
+            cloudConnections = cloudConnections.filter(c => c !== conn);
+          });
+        });
+
+        cloudPeer.on("error", (err) => {
+          console.warn("[GCMV] Cloud Remote Peer error:", err);
+        });
       }
-
-      cloudPeer = new Peer(peerId);
-
-      cloudPeer.on("open", (id) => {
-        console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
-        renderBottomRightQrCode();
-      });
-
-      cloudPeer.on("connection", (conn) => {
-        cloudConnections.push(conn);
-        console.log(`[GCMV] 📱 Phone connected via Cloud P2P! (${conn.peer})`);
-
-        conn.on("open", () => {
-          sendCloudStateToPeer(conn);
-        });
-
-        conn.on("data", async (data) => {
-          handleCloudRemoteCommand(data, conn);
-        });
-
-        conn.on("close", () => {
-          cloudConnections = cloudConnections.filter(c => c !== conn);
-        });
-
-        conn.on("error", () => {
-          cloudConnections = cloudConnections.filter(c => c !== conn);
-        });
-      });
-
-      cloudPeer.on("error", (err) => {
-        console.warn("[GCMV] Cloud Remote Peer error:", err);
-      });
     } catch (e) {
       console.warn("[GCMV] Error initializing Cloud Remote Host:", e);
     }
@@ -4167,7 +4326,7 @@
         }
       }, 300);
 
-      // One-time fallback on user touch/pointer
+      // One-time fallback on user touch/pointer or desktop mouse/keyboard interaction
       const onUserTouch = () => {
         if (sessionStorage.getItem("gcmv_restore_fullscreen") === "true") {
           const btn = document.querySelector(
@@ -4181,8 +4340,10 @@
           }
         }
       };
-      window.addEventListener("pointerdown", onUserTouch, { once: true, capture: true });
-      window.addEventListener("touchstart", onUserTouch, { once: true, capture: true });
+      ["pointerdown", "touchstart", "click", "mousedown", "keydown"].forEach((evt) => {
+        window.addEventListener(evt, onUserTouch, { once: true, capture: true });
+        document.addEventListener(evt, onUserTouch, { once: true, capture: true });
+      });
     } catch (e) {}
   }
 
@@ -4200,6 +4361,7 @@
     const fullCleanUrl = "https://" + (window.location.host || "m.youtube.com") + cleanPath;
 
     // 1. Try desktop YouTube movie_player SPA navigation (preserves fullscreen seamlessly without reload)
+    dispatchMainWorldPlayerAction("loadVideoById", videoId);
     try {
       const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
       if (moviePlayer && typeof moviePlayer.loadVideoById === "function") {
@@ -5565,16 +5727,32 @@
     }
 
     if (inpageRemoteUrlInput) {
-      if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
-        const u = window.AndroidBridge.getRemoteServerUrl();
-        inpageRemoteUrlInput.value = u || "Server Stopped";
-        renderInpageQrCode(u);
-      } else {
-        (async () => {
-          let bestUrl = settings.remoteServerUrl || "";
-          let addresses = [];
-          let serverPort = 3000;
-          if (!bestUrl) {
+      (async () => {
+        if (window.AndroidBridge && typeof window.AndroidBridge.getCloudRoomCode === "function") {
+          const bCode = window.AndroidBridge.getCloudRoomCode();
+          if (bCode) cloudRoomCode = bCode;
+        }
+
+        let bestUrl = "";
+        let addresses = [];
+        let serverPort = 8080;
+
+        if (cloudRoomCode) {
+          bestUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+        }
+
+        if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
+          const localU = window.AndroidBridge.getRemoteServerUrl();
+          if (localU && localU !== "Server Stopped") {
+            try {
+              const parsed = new URL(localU);
+              addresses.push({ name: "Local Wi-Fi", ip: parsed.hostname, type: "wifi" });
+              serverPort = parseInt(parsed.port, 10) || 8080;
+            } catch (_) {}
+          }
+        } else {
+          let probeUrl = settings.remoteServerUrl || "";
+          if (!probeUrl) {
             const probePorts = [3000, 3001, 3002, 8080, 8081];
             for (const port of probePorts) {
               try {
@@ -5586,66 +5764,67 @@
                     addresses = data.addresses;
                   }
                   if (data && data.serverUrl) {
-                    bestUrl = data.serverUrl;
+                    probeUrl = data.serverUrl;
                     break;
                   } else if (data && data.ip) {
-                    bestUrl = `http://${data.ip}:${port}/remote`;
+                    probeUrl = `http://${data.ip}:${port}/remote`;
                     break;
                   }
                 }
               } catch (e) {}
             }
           }
-          if (!bestUrl) {
-            if (cloudRoomCode) {
-              bestUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
-            } else {
-              bestUrl = "http://127.0.0.1:3000/remote";
-            }
-          }
-          inpageRemoteUrlInput.value = bestUrl;
-          renderInpageQrCode(bestUrl);
+          if (!bestUrl && probeUrl) bestUrl = probeUrl;
+        }
 
-          const chipsContainer = widget.querySelector("#inpageRemoteIpChips");
-          if (chipsContainer) {
-            chipsContainer.innerHTML = "";
-            if (cloudRoomCode) {
-              const roomBtn = document.createElement("button");
-              roomBtn.type = "button";
-              roomBtn.className = "gacha-btn-nas-test";
-              roomBtn.textContent = `🔑 Room: ${cloudRoomCode}`;
-              roomBtn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer; background:linear-gradient(135deg,#ff2e93,#7928ca);";
-              roomBtn.onclick = () => {
-                const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
-                inpageRemoteUrlInput.value = cloudUrl;
-                renderInpageQrCode(cloudUrl);
-              };
-              chipsContainer.appendChild(roomBtn);
-            }
-            if (addresses.length > 0) {
-              chipsContainer.style.display = "flex";
-              addresses.forEach((info) => {
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = "gacha-btn-nas-test";
-                const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
-                btn.textContent = `${icon} ${info.name}: ${info.ip}`;
-                btn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer;";
-                btn.onclick = () => {
-                  const newUrl = `http://${info.ip}:${serverPort}/remote`;
-                  inpageRemoteUrlInput.value = newUrl;
-                  renderInpageQrCode(newUrl);
-                };
-                chipsContainer.appendChild(btn);
-              });
-            } else if (cloudRoomCode) {
-              chipsContainer.style.display = "flex";
-            } else {
-              chipsContainer.style.display = "none";
-            }
+        if (!bestUrl) {
+          bestUrl = cloudRoomCode
+            ? `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`
+            : "http://127.0.0.1:3000/remote";
+        }
+
+        inpageRemoteUrlInput.value = bestUrl;
+        renderInpageQrCode(bestUrl);
+
+        const chipsContainer = widget.querySelector("#inpageRemoteIpChips");
+        if (chipsContainer) {
+          chipsContainer.innerHTML = "";
+          if (cloudRoomCode) {
+            const roomBtn = document.createElement("button");
+            roomBtn.type = "button";
+            roomBtn.className = "gacha-btn-nas-test";
+            roomBtn.textContent = `🔑 Room: ${cloudRoomCode}`;
+            roomBtn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer; background:linear-gradient(135deg,#ff2e93,#7928ca); color:#fff; border:none; font-weight:700;";
+            roomBtn.onclick = () => {
+              const cloudUrl = `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+              inpageRemoteUrlInput.value = cloudUrl;
+              renderInpageQrCode(cloudUrl);
+            };
+            chipsContainer.appendChild(roomBtn);
           }
-        })();
-      }
+          if (addresses.length > 0) {
+            chipsContainer.style.display = "flex";
+            addresses.forEach((info) => {
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "gacha-btn-nas-test";
+              const icon = info.type === "tailscale" ? "🔒" : info.type === "wifi" ? "📶" : info.type === "ethernet" ? "🌐" : "📱";
+              btn.textContent = `${icon} ${info.name}: ${info.ip}`;
+              btn.style.cssText = "font-size:11px; padding:4px 8px; border-radius:12px; margin:2px; cursor:pointer;";
+              btn.onclick = () => {
+                const newUrl = `http://${info.ip}:${serverPort}/remote`;
+                inpageRemoteUrlInput.value = newUrl;
+                renderInpageQrCode(newUrl);
+              };
+              chipsContainer.appendChild(btn);
+            });
+          } else if (cloudRoomCode) {
+            chipsContainer.style.display = "flex";
+          } else {
+            chipsContainer.style.display = "none";
+          }
+        }
+      })();
     }
 
     const copyInpageUrl = () => {
@@ -6518,12 +6697,12 @@
 
   function getActiveRemoteUrl() {
     if (currentRemoteQrUrl) return currentRemoteQrUrl;
+    if (cloudRoomCode) {
+      return `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
+    }
     if (window.AndroidBridge && typeof window.AndroidBridge.getRemoteServerUrl === "function") {
       const u = window.AndroidBridge.getRemoteServerUrl();
       if (u && u !== "Server Stopped") return u;
-    }
-    if (cloudRoomCode) {
-      return `https://itsmemusicchilly.github.io/GCMV-only-videos-extension/remote/?room=${cloudRoomCode}`;
     }
     if (settings.remoteServerUrl) {
       return settings.remoteServerUrl;
