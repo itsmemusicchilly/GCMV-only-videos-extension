@@ -842,6 +842,17 @@
     );
   }
 
+  let isContinuousListeningSession = false;
+
+  function isWatchPage() {
+    const p = window.location.pathname;
+    return Boolean(
+      p.startsWith("/watch") ||
+      p.startsWith("/shorts") ||
+      (new URLSearchParams(window.location.search)).get("v")
+    );
+  }
+
   function armUserGestureUnmute(targetVideoId) {
     if (gestureUnmuteArmed) return;
     gestureUnmuteArmed = true;
@@ -852,6 +863,9 @@
       window.removeEventListener("touchstart", onUserGesture, true);
       window.removeEventListener("keydown", onUserGesture, true);
       gestureUnmuteArmed = false;
+
+      // User has interacted: mark continuous session active
+      isContinuousListeningSession = true;
 
       // Programmatically unmute immediately during user activation without dispatching synthetic clicks
       const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
@@ -865,6 +879,17 @@
       if (player && typeof player.setVolume === "function" && typeof player.getVolume === "function" && player.getVolume() === 0) {
         try { player.setVolume(100); } catch (e) {}
       }
+
+      const isReallyStillMuted = video?.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+      if (!isReallyStillMuted && isWatchPage()) {
+        const now = Date.now();
+        const currentVid = targetVideoId || getCurrentVideoId();
+        if (lastAutoUnmutedVideoId !== currentVid || now - lastAutoUnmuteToastTime > 6000) {
+          lastAutoUnmuteToastTime = now;
+          lastAutoUnmutedVideoId = currentVid;
+          showToast("🔊 Auto-Unmuted 🌸");
+        }
+      }
     };
 
     window.addEventListener("pointerdown", onUserGesture, { capture: true, once: true });
@@ -877,7 +902,12 @@
     if (!settings.enabled || settings.autoUnmute === false) return;
     if (wasAdPlaying) return;
 
+    // 1. STRICT SCOPE: Only execute on actual watch/shorts pages. NEVER on Homepage, Search results, or Feeds!
+    if (!isWatchPage()) return;
+
     const currentVid = getCurrentVideoId();
+    if (!currentVid) return;
+
     if (userManuallyMutedForVideoId && userManuallyMutedForVideoId === currentVid) {
       return;
     }
@@ -887,50 +917,130 @@
     if (!video) return;
 
     const wasMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+    if (!wasMuted) {
+      // Video is playing with sound on watch page: continuous session is active
+      isContinuousListeningSession = true;
+      return;
+    }
 
-    if (wasMuted) {
+    // 2. Fresh entry from Home or Search: do not blast unmuted audio automatically!
+    // Instead, arm gesture unmute so the user's first tap on the player or screen un-mutes cleanly.
+    if (!isContinuousListeningSession) {
+      armUserGestureUnmute(currentVid);
+      return;
+    }
+
+    // 3. Continuous autoplay / next video: proceed with safe auto-unmute
+    const wasPausedBefore = video.paused;
+
+    try {
+      video.muted = false;
+    } catch (e) {}
+
+    if (player && typeof player.unMute === "function") {
       try {
-        video.muted = false;
+        player.unMute();
       } catch (e) {}
+    }
 
-      if (player && typeof player.unMute === "function") {
-        try {
-          player.unMute();
-        } catch (e) {}
+    if (player && typeof player.setVolume === "function" && typeof player.getVolume === "function" && player.getVolume() === 0) {
+      try {
+        player.setVolume(100);
+      } catch (e) {}
+    }
+
+    // Check if floating overlay on mobile / embed needs to be clicked (never click desktop player bar buttons!)
+    const isStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+    if (isStillMuted) {
+      const mobileUnmuteOverlays = document.querySelectorAll(
+        ".ytp-unmute:not(.ytp-mute-button), .player-unmute, .ytm-unmute"
+      );
+      mobileUnmuteOverlays.forEach((btn) => {
+        if (typeof btn.click === "function") {
+          try { btn.click(); } catch (e) {}
+        }
+      });
+    }
+
+    // CRITICAL: Check if unmuting caused the browser Autoplay Policy to immediately pause the video!
+    if (!wasPausedBefore && video.paused) {
+      // Browser rejected unmuted autoplay. Immediately restore muted state to keep video playing smoothly!
+      video.muted = true;
+      const playProm = video.play();
+      if (playProm !== undefined) {
+        playProm.catch(() => {});
       }
+      armUserGestureUnmute(currentVid);
+      return;
+    }
 
-      if (player && typeof player.setVolume === "function" && typeof player.getVolume === "function" && player.getVolume() === 0) {
-        try {
-          player.setVolume(100);
-        } catch (e) {}
+    const isReallyStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
+    if (!isReallyStillMuted) {
+      isContinuousListeningSession = true;
+      const now = Date.now();
+      if (lastAutoUnmutedVideoId !== currentVid || now - lastAutoUnmuteToastTime > 6000) {
+        lastAutoUnmuteToastTime = now;
+        lastAutoUnmutedVideoId = currentVid;
+        showToast("🔊 Auto-Unmuted 🌸");
       }
+    } else {
+      armUserGestureUnmute(currentVid);
+    }
+  }
 
-      // Check if floating overlay on mobile / embed needs to be clicked (never click desktop player bar buttons!)
-      const isStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
-      if (isStillMuted) {
-        const mobileUnmuteOverlays = document.querySelectorAll(
-          ".ytp-unmute:not(.ytp-mute-button), .player-unmute, .ytm-unmute"
-        );
-        mobileUnmuteOverlays.forEach((btn) => {
-          if (typeof btn.click === "function") {
-            try { btn.click(); } catch (e) {}
+  // ==========================================================
+  // Video Auto-Play Recovery Engine
+  // ==========================================================
+  function attemptAutoplayRecovery(reason = "") {
+    if (!settings.enabled) return;
+    if (window.__gachaUserManuallyPaused) return;
+
+    const isWatch = window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts");
+    if (!isWatch) return;
+
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (!video) return;
+
+    // If video is already playing or ended, nothing to recover
+    if (!video.paused || video.ended) return;
+
+    // Only auto-play if at the beginning of the video (within first 3 seconds) or newly loaded
+    if (video.currentTime > 3.0) return;
+
+    // 1. Try moviePlayer API first
+    if (moviePlayer && typeof moviePlayer.playVideo === "function") {
+      try {
+        moviePlayer.playVideo();
+      } catch (_) {}
+    }
+
+    // 2. Call video.play() with browser autoplay policy handling
+    try {
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          // If browser autoplay policy blocked unmuted playback (NotAllowedError):
+          // Start playing muted so playback continues without freezing, then arm gesture unmute!
+          if (!video.muted) {
+            video.muted = true;
+            video.play().catch(() => {});
+            armUserGestureUnmute(getCurrentVideoId());
+          }
+
+          // Fallback: tap the YouTube player play button
+          const playBtn = document.querySelector(
+            ".ytp-play-button, .player-controls-play-pause, [data-testid='play-button'], button.ytp-play-button"
+          );
+          if (playBtn && typeof playBtn.click === "function") {
+            try { playBtn.click(); } catch (_) {}
           }
         });
       }
-
-      const isReallyStillMuted = video.muted || (player && typeof player.isMuted === "function" && player.isMuted());
-      if (!isReallyStillMuted) {
-        const now = Date.now();
-        if (lastAutoUnmutedVideoId !== currentVid || now - lastAutoUnmuteToastTime > 6000) {
-          lastAutoUnmuteToastTime = now;
-          lastAutoUnmutedVideoId = currentVid;
-          showToast("🔊 Auto-Unmuted 🌸");
-        }
-      } else {
-        armUserGestureUnmute(currentVid);
-      }
-    }
+    } catch (_) {}
   }
+
+  window.__gachaAutoplayRecovery = attemptAutoplayRecovery;
 
   // ==========================================================
   // Preferred Video Resolution Engine
@@ -2442,24 +2552,142 @@
     try {
       const url = new URL(window.location.href);
       const listId = url.searchParams.get("list");
-      if (listId && !url.searchParams.get("gcmv_queue")) {
-        let nextVid = "";
-        const nextLink = document.querySelector(
-          "ytm-playlist a[href*='watch?v='], .playlist-items a[href*='watch?v='], ytd-playlist-panel-video-renderer a[href*='watch?v=']"
-        );
-        if (nextLink && nextLink.href) {
-          const m = nextLink.href.match(/(?:v=|\/watch\/)([a-zA-Z0-9_-]{11})/);
-          if (m) nextVid = m[1];
-        }
-        savedMixContext = {
-          listId: listId,
-          lastVideoId: getCurrentVideoId(),
-          nextVideoId: nextVid,
-          savedAt: Date.now()
-        };
-        sessionStorage.setItem("gcmv_saved_mix", JSON.stringify(savedMixContext));
-        console.log("[GCMV] 🎵 Captured Mix state before queue:", savedMixContext);
+      // If we are already playing an off-mix queue video or not in a playlist/mix, do not overwrite existing saved context
+      if (!listId || url.searchParams.get("gcmv_queue")) {
+        return;
       }
+
+      const currentVid = getCurrentVideoId();
+      let currentMixIndex = -1;
+      const urlIndex = url.searchParams.get("index");
+      if (urlIndex) {
+        const parsed = parseInt(urlIndex, 10);
+        if (!isNaN(parsed) && parsed > 0) currentMixIndex = parsed;
+      }
+
+      let nextVid = "";
+      let nextIndex = -1;
+
+      // 1. Try extracting from moviePlayer API (Desktop YouTube)
+      try {
+        const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+        if (moviePlayer && typeof moviePlayer.getPlaylist === "function") {
+          const playlist = moviePlayer.getPlaylist();
+          const pIndex = typeof moviePlayer.getPlaylistIndex === "function" ? moviePlayer.getPlaylistIndex() : -1;
+          if (Array.isArray(playlist) && playlist.length > 0) {
+            const resolvedIndex = pIndex >= 0 ? pIndex : playlist.indexOf(currentVid);
+            if (resolvedIndex >= 0) {
+              if (currentMixIndex === -1) currentMixIndex = resolvedIndex + 1;
+              if (resolvedIndex + 1 < playlist.length) {
+                nextVid = playlist[resolvedIndex + 1];
+                nextIndex = resolvedIndex + 2;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 2. Query DOM playlist items (works on Desktop & Mobile / Android WebView)
+      const playlistItems = document.querySelectorAll(
+        "ytd-playlist-panel-renderer #items ytd-playlist-panel-video-renderer, " +
+        "ytd-playlist-panel-video-renderer, " +
+        "ytm-playlist-video-renderer, " +
+        "ytm-compact-playlist-video-renderer, " +
+        "ytm-playlist-panel-video-renderer, " +
+        "ytm-custom-playlist-video-renderer, " +
+        ".playlist-items ytm-playlist-video-renderer, " +
+        ".playlist-panel-videos ytm-playlist-video-renderer"
+      );
+
+      if (playlistItems && playlistItems.length > 0) {
+        let domCurrentIndex = -1;
+        const parsedItems = [];
+
+        for (let i = 0; i < playlistItems.length; i++) {
+          const item = playlistItems[i];
+          const link = item.querySelector("a#wc-endpoint, a#thumbnail, a.media-item-thumbnail-container, a");
+          let itemVid = "";
+          let itemIdx = -1;
+
+          if (link && link.href) {
+            try {
+              const u = new URL(link.href, window.location.origin);
+              itemVid = u.searchParams.get("v") || "";
+              const idxParam = u.searchParams.get("index");
+              if (idxParam) {
+                const parsed = parseInt(idxParam, 10);
+                if (!isNaN(parsed) && parsed > 0) itemIdx = parsed;
+              }
+            } catch (_) {}
+          }
+
+          const isSelected =
+            (currentVid && itemVid === currentVid) ||
+            item.hasAttribute("selected") ||
+            item.getAttribute("aria-selected") === "true" ||
+            item.classList.contains("selected") ||
+            item.classList.contains("active");
+
+          if (isSelected && domCurrentIndex === -1) {
+            domCurrentIndex = i;
+            if (itemIdx > 0 && currentMixIndex === -1) currentMixIndex = itemIdx;
+          }
+
+          const titleEl = item.querySelector("#video-title, .media-item-headline, .compact-media-item-headline, .title");
+          const channelEl = item.querySelector("#byline, #channel-name, .media-item-byline, .compact-media-item-byline");
+          const title = titleEl ? titleEl.textContent.trim() : "";
+          const channel = channelEl ? channelEl.textContent.trim() : "";
+          const isGacha = typeof isGachaVideo === "function" ? isGachaVideo(title, channel, "", itemVid) : true;
+
+          parsedItems.push({
+            index: i,
+            videoId: itemVid,
+            playlistIndex: itemIdx,
+            title,
+            channel,
+            isGacha
+          });
+        }
+
+        if (domCurrentIndex !== -1) {
+          const upcoming = parsedItems.slice(domCurrentIndex + 1);
+          let chosen = null;
+
+          // If Mix Guard is enabled, prefer the first upcoming Gacha video in the mix
+          if (settings.enabled && settings.autoplayGuard) {
+            chosen = upcoming.find(it => it.isGacha && it.videoId);
+          }
+
+          // If no Gacha video found or Mix Guard not active, pick immediate next item
+          if (!chosen && upcoming.length > 0) {
+            chosen = upcoming.find(it => it.videoId) || upcoming[0];
+          }
+
+          if (chosen && chosen.videoId) {
+            nextVid = chosen.videoId;
+            if (chosen.playlistIndex > 0) {
+              nextIndex = chosen.playlistIndex;
+            } else if (currentMixIndex > 0) {
+              nextIndex = currentMixIndex + (chosen.index - domCurrentIndex);
+            }
+          }
+        }
+      }
+
+      // 3. Fallback for nextIndex if not explicitly determined
+      if (nextIndex <= 0) {
+        nextIndex = currentMixIndex > 0 ? currentMixIndex + 1 : 2;
+      }
+
+      savedMixContext = {
+        listId: listId,
+        lastVideoId: currentVid,
+        nextVideoId: nextVid,
+        nextIndex: nextIndex,
+        savedAt: Date.now()
+      };
+      sessionStorage.setItem("gcmv_saved_mix", JSON.stringify(savedMixContext));
+      console.log("[GCMV] 🎵 Captured Mix state before queue:", savedMixContext);
     } catch (e) {
       console.warn("[GCMV] Error capturing Mix state:", e);
     }
@@ -2472,8 +2700,22 @@
     sessionStorage.removeItem("gcmv_saved_mix");
 
     showToast("🎵 Queue finished: Resuming YouTube Mix 🌸");
-    const targetVid = mix.nextVideoId || mix.lastVideoId || "";
-    const resumeUrl = "https://" + window.location.host + "/watch?v=" + targetVid + "&list=" + mix.listId;
+
+    const host = window.AndroidBridge ? "m.youtube.com" : (window.location.host || "www.youtube.com");
+    let resumeUrl = "https://" + host + "/watch?";
+    const params = new URLSearchParams();
+
+    if (mix.nextVideoId) {
+      params.set("v", mix.nextVideoId);
+    }
+    params.set("list", mix.listId);
+    if (mix.nextIndex && mix.nextIndex > 0) {
+      params.set("index", String(mix.nextIndex));
+    }
+
+    resumeUrl += params.toString();
+    console.log("[GCMV] 🎵 Resuming saved Mix via URL:", resumeUrl);
+
     if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
       window.AndroidBridge.loadUrl(resumeUrl);
     } else {
@@ -2721,7 +2963,8 @@
 
       case "play_now":
         if (data.videoId) {
-          navigateToVideo(data.videoId, data.title || "");
+          captureCurrentMixState();
+          navigateToVideo(data.videoId, data.title || "", true);
           setTimeout(broadcastCloudState, 1200);
         }
         break;
@@ -2936,7 +3179,8 @@
                 }
               }, 1000);
             } else if (item.action === "play_now" && item.videoId) {
-              navigateToVideo(item.videoId, item.title);
+              captureCurrentMixState();
+              navigateToVideo(item.videoId, item.title, true);
             } else if (item.action === "volume" && video && typeof item.value === "number") {
               video.volume = Math.max(0, Math.min(100, item.value)) / 100;
             }
@@ -3021,8 +3265,12 @@
     video.removeEventListener("timeupdate", handleVideoTimeUpdateForQueue);
     video.addEventListener("timeupdate", handleVideoTimeUpdateForQueue);
 
-    // Track user-initiated pause so the Android auto-play recovery injection
-    // (scheduleDelayedInjections in MainActivity.java) doesn't override an intentional pause
+    // Auto-play recovery on canplay
+    video.removeEventListener("canplay", handleVideoCanPlayForRecovery);
+    video.addEventListener("canplay", handleVideoCanPlayForRecovery);
+
+    // Track user-initiated pause so the auto-play recovery
+    // doesn't override an intentional user pause
     video.removeEventListener("pause", handleUserPauseTrack);
     video.removeEventListener("play", handleUserPlayResume);
     video.removeEventListener("playing", handleUserPlayResume);
@@ -3032,9 +3280,77 @@
     videoListenerAttached = true;
   }
 
-  function handleUserPauseTrack() {
-    // Only set the flag if the pause was triggered by the user (isTrusted) or during ad/skip
-    window.__gachaUserManuallyPaused = true;
+  function handleVideoCanPlayForRecovery() {
+    attemptAutoplayRecovery("video-canplay");
+  }
+
+  let lastUserPauseInteractionTime = 0;
+  let lastNavigatedTime = Date.now();
+
+  // Listen for physical user gestures targeting play/pause controls or keyboard
+  if (!window.__gachaUserPauseGlobalHooksAttached__) {
+    window.__gachaUserPauseGlobalHooksAttached__ = true;
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        const target = e.target;
+        if (!target) return;
+        if (
+          target.closest &&
+          (target.closest(".ytp-play-button") ||
+            target.closest(".player-controls-play-pause") ||
+            target.closest("[data-testid='play-button']") ||
+            target.closest(".ytp-cued-thumbnail-overlay") ||
+            target.closest(".html5-video-player"))
+        ) {
+          lastUserPauseInteractionTime = Date.now();
+        }
+      },
+      { capture: true, passive: true }
+    );
+
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (
+          e.target &&
+          (e.target.tagName === "INPUT" ||
+            e.target.tagName === "TEXTAREA" ||
+            e.target.isContentEditable)
+        ) {
+          return;
+        }
+        if (e.code === "Space" || e.key === " " || e.code === "KeyK" || e.key === "k" || e.key === "K") {
+          lastUserPauseInteractionTime = Date.now();
+        }
+      },
+      { capture: true, passive: true }
+    );
+  }
+
+  function handleUserPauseTrack(e) {
+    const video = e?.target || document.querySelector("video.html5-main-video") || document.querySelector("video");
+
+    // 1. Never treat video ending as an intentional user pause
+    if (video && (video.ended || (video.duration > 0 && video.currentTime >= video.duration - 0.5))) {
+      return;
+    }
+
+    // 2. Never treat internal skip, ad handling, or queue transition as a user pause
+    if (isHandlingQueueTransition || isSkipping || wasAdPlaying || autoSkipMutedVideo) {
+      return;
+    }
+
+    // 3. Never treat initial track load/buffer (within 2.5s of navigation) as a user pause
+    if (Date.now() - lastNavigatedTime < 2500 && (!video || video.currentTime < 1.0)) {
+      return;
+    }
+
+    // 4. Only flag as manual pause if accompanied by a real user interaction or trusted mid-playback event
+    const isRecentUserInteraction = Date.now() - lastUserPauseInteractionTime < 1500;
+    if (isRecentUserInteraction || (e && e.isTrusted && video && video.currentTime > 1.0 && !video.seeking)) {
+      window.__gachaUserManuallyPaused = true;
+    }
   }
 
   function handleUserPlayResume() {
@@ -3425,6 +3741,8 @@
     if (!videoId) return;
     saveFullscreenStateBeforeNavigate();
     recordRecentPlayedVideoId(videoId);
+    window.__gachaUserManuallyPaused = false;
+    lastNavigatedTime = Date.now();
 
     const cleanPath = "/watch?v=" + videoId + (stripMix ? "&gcmv_queue=1" : "");
     const fullCleanUrl = "https://" + (window.location.host || "m.youtube.com") + cleanPath;
@@ -3434,11 +3752,17 @@
       const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
       if (moviePlayer && typeof moviePlayer.loadVideoById === "function") {
         moviePlayer.loadVideoById(videoId);
+        if (typeof moviePlayer.playVideo === "function") {
+          try { moviePlayer.playVideo(); } catch (_) {}
+        }
         try {
           window.history.pushState(null, "", cleanPath);
           window.dispatchEvent(new CustomEvent("yt-navigate-finish"));
         } catch (e) {}
         if (title) showToast("▶️ Playing: " + title + " 🌸");
+        setTimeout(() => {
+          attemptAutoplayRecovery("navigateToVideo");
+        }, 350);
         return;
       }
     } catch (e) {}
@@ -3869,6 +4193,8 @@
 
   function triggerAutoSkip(title, channel, videoId) {
     removeSkipOverlay();
+    window.__gachaUserManuallyPaused = false;
+    lastNavigatedTime = Date.now();
 
     // 1. Immediately mute and pause the video so non-Gacha audio/video does NOT play aloud
     const video =
@@ -3895,9 +4221,11 @@
     if (nextGachaInMix && nextGachaInMix.element) {
       showToast(`🛡️ Non-Gacha skipped ➔ ${nextGachaInMix.title.substring(0, 24)}... 🌸`, videoId, channel);
       nextGachaInMix.element.click();
+      setTimeout(() => { attemptAutoplayRecovery("autoskip-mix"); }, 500);
     } else if (nextGachaRec && nextGachaRec.element) {
       showToast(`🛡️ Non-Gacha skipped ➔ ${nextGachaRec.title.substring(0, 24)}... 🌸`, videoId, channel);
       nextGachaRec.element.click();
+      setTimeout(() => { attemptAutoplayRecovery("autoskip-rec"); }, 500);
     } else {
       showToast(`🛡️ Non-Gacha skipped ➔ Finding GCMV version... 🌸`, videoId, channel);
       executeYoutubeSearch(gachaSearchQuery);
@@ -4685,7 +5013,8 @@
             if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
               window.AndroidBridge.removeQueueItem(qId);
             }
-            navigateToVideo(vid);
+            captureCurrentMixState();
+            navigateToVideo(vid, "", true);
           };
         });
 
@@ -5679,8 +6008,11 @@
     } catch (e) {}
   }
 
+  let lastAutoplayToggleAttemptAt = 0;
   function ensureYoutubeAutoplayToggleOn() {
     if (!settings.enabled || !settings.autoplayGuard) return;
+    const now = Date.now();
+    if (now - lastAutoplayToggleAttemptAt < 1500) return;
 
     try {
       // 1. Desktop YouTube HTML5 player
@@ -5689,10 +6021,31 @@
       const targetBtn = desktopBtn || desktopToggle?.closest("button");
 
       if (desktopToggle) {
-        const isChecked = desktopToggle.getAttribute("aria-checked") === "true" ||
-                          targetBtn?.getAttribute("aria-checked") === "true" ||
-                          (targetBtn?.getAttribute("aria-label") || "").toLowerCase().includes("autoplay is on");
-        if (!isChecked) {
+        const toggleAriaChecked = desktopToggle.getAttribute("aria-checked");
+        const btnAriaChecked = targetBtn?.getAttribute("aria-checked");
+        const btnAriaLabel = (targetBtn?.getAttribute("aria-label") || "").toLowerCase();
+        const btnTitle = (targetBtn?.getAttribute("data-title-no-tooltip") || targetBtn?.getAttribute("title") || "").toLowerCase();
+
+        // Autoplay is DEFINITELY ON if:
+        const isDefinitelyOn =
+          toggleAriaChecked === "true" ||
+          btnAriaChecked === "true" ||
+          btnAriaLabel.includes("autoplay is on") ||
+          btnAriaLabel.includes("turn off autoplay") ||
+          btnTitle.includes("autoplay is on") ||
+          btnTitle.includes("turn off autoplay");
+
+        // Autoplay is DEFINITELY OFF if:
+        const isDefinitelyOff =
+          toggleAriaChecked === "false" ||
+          btnAriaChecked === "false" ||
+          btnAriaLabel.includes("autoplay is off") ||
+          btnAriaLabel.includes("turn on autoplay") ||
+          btnTitle.includes("autoplay is off") ||
+          btnTitle.includes("turn on autoplay");
+
+        if (isDefinitelyOff && !isDefinitelyOn) {
+          lastAutoplayToggleAttemptAt = now;
           (targetBtn || desktopToggle).click();
         }
       }
@@ -5702,11 +6055,24 @@
         "#autonav-toggle-button, ytm-autonav-toggle-button button, button.autonav-toggle-button, button[aria-label*='Autoplay'], button[aria-label*='autoplay']"
       );
       if (mobileToggle) {
-        const isPressed = mobileToggle.getAttribute("aria-pressed") === "true" ||
-                          mobileToggle.getAttribute("aria-checked") === "true" ||
-                          (mobileToggle.getAttribute("aria-label") || "").toLowerCase().includes("turn off autoplay") ||
-                          (mobileToggle.getAttribute("aria-label") || "").toLowerCase().includes("autoplay is on");
-        if (!isPressed) {
+        const mChecked = mobileToggle.getAttribute("aria-checked");
+        const mPressed = mobileToggle.getAttribute("aria-pressed");
+        const mLabel = (mobileToggle.getAttribute("aria-label") || "").toLowerCase();
+
+        const isMobileOn =
+          mChecked === "true" ||
+          mPressed === "true" ||
+          mLabel.includes("turn off autoplay") ||
+          mLabel.includes("autoplay is on");
+
+        const isMobileOff =
+          mChecked === "false" ||
+          mPressed === "false" ||
+          mLabel.includes("turn on autoplay") ||
+          mLabel.includes("autoplay is off");
+
+        if (isMobileOff && !isMobileOn) {
+          lastAutoplayToggleAttemptAt = now;
           mobileToggle.click();
         }
       }
@@ -5735,6 +6101,7 @@
 
     // 0. Check for queued video from Cloud Remote P2P Queue
     if (cloudRemoteQueue && cloudRemoteQueue.length > 0) {
+      captureCurrentMixState();
       const item = cloudRemoteQueue.shift();
       extStorage.set({ cloudRemoteQueue }).catch(() => {});
       broadcastCloudState();
@@ -5751,6 +6118,7 @@
         if (queuedJson) {
           const item = JSON.parse(queuedJson);
           if (item && item.videoId) {
+            captureCurrentMixState();
             showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
             navigateToVideo(item.videoId, item.title, true);
             return;
@@ -5769,6 +6137,7 @@
         if (res.ok) {
           const data = await res.json();
           if (data && data.item && data.item.videoId) {
+            captureCurrentMixState();
             showToast("📱 Remote Queue: Playing next ➔ " + (data.item.title || data.item.videoId) + " 🌸");
             navigateToVideo(data.item.videoId, data.item.title, true);
             return;
@@ -5875,29 +6244,21 @@
           showToast("🌸 Skipping ➔ " + firstTitle.substring(0, 30) + "... ✨");
           if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
           saveFullscreenStateBeforeNavigate();
-          if (firstLink && typeof firstLink.click === "function") {
-            firstLink.click();
-          } else if (firstVideoId) {
-            window.location.href = "https://" + window.location.host + "/watch?v=" + firstVideoId;
-          }
+          navigateToVideo(firstVideoId, firstTitle);
           return;
         }
 
         showToast("✨ Next up: " + firstTitle.substring(0, 35) + "...");
         if (firstVideoId) recordRecentPlayedVideoId(firstVideoId);
-        // Guarantee auto-advance: if YouTube doesn't navigate within 1.2s, trigger it
+        // Allow YouTube's native autonav countdown (4-6s) to advance naturally without synthetic DOM clicks.
+        // Fallback: If YouTube doesn't navigate within 5.5s, trigger clean navigation with autoplay recovery!
         setTimeout(() => {
           const vid = document.querySelector("video.html5-main-video") || document.querySelector("video");
           const nowVid = getCurrentVideoId();
           if (nowVid === currentVideoId && (vid?.ended || vid?.paused)) {
-            saveFullscreenStateBeforeNavigate();
-            if (firstLink && typeof firstLink.click === "function") {
-              firstLink.click();
-            } else if (firstVideoId) {
-              window.location.href = "https://" + window.location.host + "/watch?v=" + firstVideoId;
-            }
+            navigateToVideo(firstVideoId, firstTitle);
           }
-        }, 1200);
+        }, 5500);
         return;
       }
 
@@ -5920,18 +6281,12 @@
         }
 
         if (recVideoId && recVideoId !== currentVideoId && isGachaVideo(title, channel, "", recVideoId)) {
-          if (link && (link.href || typeof link.click === "function")) {
-            foundGacha = true;
-            showToast("🌸 Skipping ➔ " + title.substring(0, 30) + "... ✨");
-            if (recVideoId) recordRecentPlayedVideoId(recVideoId);
-            saveFullscreenStateBeforeNavigate();
-            if (typeof link.click === "function") {
-              link.click();
-            } else {
-              window.location.href = link.href;
-            }
-            break;
-          }
+          foundGacha = true;
+          showToast("🌸 Skipping ➔ " + title.substring(0, 30) + "... ✨");
+          if (recVideoId) recordRecentPlayedVideoId(recVideoId);
+          saveFullscreenStateBeforeNavigate();
+          navigateToVideo(recVideoId, title);
+          break;
         }
       }
 
@@ -6182,9 +6537,16 @@
     userManuallyMutedForVideoId = "";
     qualityAttemptedForVideoId = "";
     window.__gachaUserManuallyPaused = false;
+    lastNavigatedTime = Date.now();
     isSkipping = false;
     lastSkippedSegment = null;
     removeSkipOverlay();
+
+    // If navigating away from watch pages to Home or Search, reset continuous listening session
+    if (!isWatchPage()) {
+      isContinuousListeningSession = false;
+      gestureUnmuteArmed = false;
+    }
 
     // Restore only state that this extension changed. Preserve user mute and
     // playback-rate choices across YouTube SPA navigation.
@@ -6208,15 +6570,18 @@
     lastNavigationHref = window.location.href;
 
     // Follow-up retries as new page components mount and populate
-    [300, 800, 1500, 2500].forEach((delay) => {
+    [300, 800, 1500, 2500, 4000].forEach((delay) => {
       setTimeout(() => {
         if (settings.enabled) {
           applyFeatures();
           ensureAudioContextResumed();
-          if (settings.autoUnmute !== false) {
-            attemptAutoUnmute("navigation-delay");
+          if (isWatchPage()) {
+            attemptAutoplayRecovery("navigation-delay");
+            if (settings.autoUnmute !== false) {
+              attemptAutoUnmute("navigation-delay");
+            }
+            applyPreferredResolution("navigation-delay");
           }
-          applyPreferredResolution("navigation-delay");
         }
       }, delay);
     });
@@ -6302,10 +6667,14 @@
         setupVideoPlayerListeners();
       }
 
+      const isWatch = window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts");
+      if (video && video.paused && !video.ended && video.currentTime < 2.0 && isWatch && !window.__gachaUserManuallyPaused) {
+        attemptAutoplayRecovery("watchdog");
+      }
+
       if (settings.showJukebox && !document.getElementById("gacha-floating-widget")) {
         injectFloatingJukebox();
       }
-      const isWatch = window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts");
       if (settings.showSearchChips && !isWatch && !document.getElementById("gacha-search-chips-bar")) {
         injectSearchChips();
       }
