@@ -16,6 +16,9 @@ android-app/local.properties
 # Packages
 extension.crx
 
+# Media & screencasts
+*.mp4
+
 # OS & Editor
 .DS_Store
 Thumbs.db
