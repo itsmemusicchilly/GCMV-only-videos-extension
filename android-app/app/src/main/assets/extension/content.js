@@ -140,6 +140,7 @@
     remoteServerUrl: "",
     remotePinEnabled: false,
     remotePin: "",
+    showBottomLeftQr: false,
     showBottomRightQr: false,
     showQrInFullscreen: true
   };
@@ -3491,6 +3492,7 @@
         remoteServerUrl: "",
         remotePinEnabled: false,
         remotePin: "",
+        showBottomLeftQr: false,
         showBottomRightQr: false,
         showQrInFullscreen: true,
         customSkipDb: {},
@@ -3498,6 +3500,9 @@
         retimedSegments: {}
       });
       settings = { ...settings, ...data };
+      if (settings.showBottomLeftQr === undefined && settings.showBottomRightQr !== undefined) {
+        settings.showBottomLeftQr = settings.showBottomRightQr;
+      }
       if (typeof settings.nasServerUrl !== "string") settings.nasServerUrl = "";
       if (typeof settings.nasAuthToken !== "string") settings.nasAuthToken = "";
       if (settings.useNasServer && !settings.nasAuthToken) {
@@ -3567,7 +3572,7 @@
       } else {
         removeFloatingJukebox();
       }
-      updateBottomRightQrVisibility();
+      updateBottomLeftQrVisibility();
       return;
     }
 
@@ -3589,7 +3594,7 @@
     } else {
       removeFloatingJukebox();
     }
-    updateBottomRightQrVisibility();
+    updateBottomLeftQrVisibility();
 
     const urlParams = new URLSearchParams(window.location.search);
     const videoId = urlParams.get("v") || (window.location.pathname.startsWith("/watch/") ? window.location.pathname.replace("/watch/", "") : "");
@@ -4832,15 +4837,15 @@
                     <div style="font-size: 11px; color: #a09bb8; margin-top: 6px;">📷 Scan with phone camera to open</div>
                   </div>
                   <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255, 46, 147, 0.3);">
-                    <label class="gacha-inpage-item" for="inpageToggleBottomRightQr" style="padding: 6px 0; background: transparent; margin: 0;">
+                    <label class="gacha-inpage-item" for="inpageToggleBottomLeftQr" style="padding: 6px 0; background: transparent; margin: 0;">
                       <div class="gacha-inpage-desc">
-                        <span class="gacha-inpage-title" style="font-size: 12px;">📱 Display QR Code at Bottom Right</span>
+                        <span class="gacha-inpage-title" style="font-size: 12px;">📱 Display QR Code at Bottom Left</span>
                         <span class="gacha-inpage-sub">Show on-screen floating QR badge so viewers can scan anytime</span>
                       </div>
-                      <input type="checkbox" id="inpageToggleBottomRightQr" class="gacha-inpage-switch" ${settings.showBottomRightQr ? "checked" : ""}>
+                      <input type="checkbox" id="inpageToggleBottomLeftQr" class="gacha-inpage-switch" ${Boolean(settings.showBottomLeftQr || settings.showBottomRightQr) ? "checked" : ""}>
                     </label>
 
-                    <label class="gacha-inpage-item" id="inpageRowQrFullscreen" for="inpageToggleQrFullscreen" style="padding: 6px 0; background: transparent; margin: 0; ${settings.showBottomRightQr ? '' : 'display:none;'}">
+                    <label class="gacha-inpage-item" id="inpageRowQrFullscreen" for="inpageToggleQrFullscreen" style="padding: 6px 0; background: transparent; margin: 0; ${Boolean(settings.showBottomLeftQr || settings.showBottomRightQr) ? '' : 'display:none;'}">
                       <div class="gacha-inpage-desc">
                         <span class="gacha-inpage-title" style="font-size: 12px;">📺 Show QR Code in Fullscreen</span>
                         <span class="gacha-inpage-sub">Keep floating QR badge visible during fullscreen video playback</span>
@@ -5210,19 +5215,21 @@
       };
     }
 
-    const inpageToggleBottomRightQr = widget.querySelector("#inpageToggleBottomRightQr");
+    const inpageToggleBottomLeftQr = widget.querySelector("#inpageToggleBottomLeftQr") || widget.querySelector("#inpageToggleBottomRightQr");
     const inpageToggleQrFullscreen = widget.querySelector("#inpageToggleQrFullscreen");
     const inpageRowQrFullscreen = widget.querySelector("#inpageRowQrFullscreen");
 
-    if (inpageToggleBottomRightQr) {
-      inpageToggleBottomRightQr.onchange = async (e) => {
+    if (inpageToggleBottomLeftQr) {
+      inpageToggleBottomLeftQr.onchange = async (e) => {
         const val = e.target.checked;
+        settings.showBottomLeftQr = val;
         settings.showBottomRightQr = val;
-        bottomRightQrDismissed = false;
+        bottomLeftQrDismissed = false;
         if (inpageRowQrFullscreen) inpageRowQrFullscreen.style.display = val ? "" : "none";
-        await extStorage.set({ showBottomRightQr: val });
-        updateBottomRightQrVisibility();
+        await extStorage.set({ showBottomLeftQr: val, showBottomRightQr: val });
+        updateBottomLeftQrVisibility();
         if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
+          window.AndroidBridge.savePref("showBottomLeftQr", JSON.stringify(val));
           window.AndroidBridge.savePref("showBottomRightQr", JSON.stringify(val));
         }
       };
@@ -5233,7 +5240,7 @@
         const val = e.target.checked;
         settings.showQrInFullscreen = val;
         await extStorage.set({ showQrInFullscreen: val });
-        updateBottomRightQrVisibility();
+        updateBottomLeftQrVisibility();
         if (window.AndroidBridge && typeof window.AndroidBridge.savePref === "function") {
           window.AndroidBridge.savePref("showQrInFullscreen", JSON.stringify(val));
         }
@@ -5748,12 +5755,13 @@
     if (inpageToggleSearchChips) inpageToggleSearchChips.checked = settings.showSearchChips;
     if (inpageToggleFilterOfficial) inpageToggleFilterOfficial.checked = settings.filterOfficialVideos;
 
-    const inpageToggleBottomRightQr = document.querySelector("#inpageToggleBottomRightQr");
+    const inpageToggleBottomLeftQr = document.querySelector("#inpageToggleBottomLeftQr") || document.querySelector("#inpageToggleBottomRightQr");
     const inpageToggleQrFullscreen = document.querySelector("#inpageToggleQrFullscreen");
     const inpageRowQrFullscreen = document.querySelector("#inpageRowQrFullscreen");
-    if (inpageToggleBottomRightQr) inpageToggleBottomRightQr.checked = settings.showBottomRightQr === true;
+    const isQrActive = Boolean(settings.showBottomLeftQr || settings.showBottomRightQr);
+    if (inpageToggleBottomLeftQr) inpageToggleBottomLeftQr.checked = isQrActive;
     if (inpageToggleQrFullscreen) inpageToggleQrFullscreen.checked = settings.showQrInFullscreen !== false;
-    if (inpageRowQrFullscreen) inpageRowQrFullscreen.style.display = settings.showBottomRightQr ? "" : "none";
+    if (inpageRowQrFullscreen) inpageRowQrFullscreen.style.display = isQrActive ? "" : "none";
 
     if (statusText) {
       statusText.textContent = settings.enabled && settings.autoSkipNonGacha ? "ACTIVE" : "PAUSED";
@@ -6023,10 +6031,10 @@
   }
 
   // ==========================================================
-  // Bottom-Right Remote QR Code Overlay Badge
+  // Bottom-Left Remote QR Code Overlay Badge
   // ==========================================================
   let currentRemoteQrUrl = "";
-  let bottomRightQrDismissed = false;
+  let bottomLeftQrDismissed = false;
 
   function getActiveRemoteUrl() {
     if (currentRemoteQrUrl) return currentRemoteQrUrl;
@@ -6043,11 +6051,11 @@
     return "http://127.0.0.1:3000/remote";
   }
 
-  function renderBottomRightQrCode(overrideUrl) {
-    const qrWidget = document.getElementById("gacha-bottom-right-qr");
+  function renderBottomLeftQrCode(overrideUrl) {
+    const qrWidget = document.getElementById("gacha-bottom-left-qr") || document.getElementById("gacha-bottom-right-qr");
     if (!qrWidget) return;
-    const qrBox = qrWidget.querySelector("#gacha-br-qr-svg-box");
-    const roomText = qrWidget.querySelector("#gacha-br-qr-room-text");
+    const qrBox = qrWidget.querySelector("#gacha-bl-qr-svg-box") || qrWidget.querySelector("#gacha-br-qr-svg-box");
+    const roomText = qrWidget.querySelector("#gacha-bl-qr-room-text") || qrWidget.querySelector("#gacha-br-qr-room-text");
     if (!qrBox) return;
 
     const url = overrideUrl || getActiveRemoteUrl();
@@ -6077,54 +6085,54 @@
         qrBox.innerHTML = `<img src="${url.replace(/\/remote\/?$/, "")}/api/qr" style="width: 100%; height: 100%; object-fit: contain;" alt="QR Code" />`;
       }
     } catch (e) {
-      console.warn("[GCMV] Bottom-right QR render error:", e);
+      console.warn("[GCMV] Bottom-left QR render error:", e);
     }
   }
 
-  function injectBottomRightQrWidget() {
-    let qrWidget = document.getElementById("gacha-bottom-right-qr");
+  function injectBottomLeftQrWidget() {
+    let qrWidget = document.getElementById("gacha-bottom-left-qr") || document.getElementById("gacha-bottom-right-qr");
     if (qrWidget) return qrWidget;
 
     qrWidget = document.createElement("div");
-    qrWidget.id = "gacha-bottom-right-qr";
-    qrWidget.className = "gacha-br-qr-compact";
+    qrWidget.id = "gacha-bottom-left-qr";
+    qrWidget.className = "gacha-bl-qr-compact";
     qrWidget.title = "Click to expand / collapse";
 
     appendTrustedHtml(qrWidget, `
-      <button type="button" class="gacha-br-qr-close" title="Dismiss QR overlay" aria-label="Close">✕</button>
-      <div class="gacha-br-qr-box" id="gacha-br-qr-svg-box"></div>
-      <div class="gacha-br-qr-info">
-        <span class="gacha-br-qr-label">📱 Remote</span>
-        <span class="gacha-br-qr-room" id="gacha-br-qr-room-text">Room: ...</span>
+      <button type="button" class="gacha-bl-qr-close" title="Dismiss QR overlay" aria-label="Close">✕</button>
+      <div class="gacha-bl-qr-box" id="gacha-bl-qr-svg-box"></div>
+      <div class="gacha-bl-qr-info">
+        <span class="gacha-bl-qr-label">📱 Remote</span>
+        <span class="gacha-bl-qr-room" id="gacha-bl-qr-room-text">Room: ...</span>
       </div>
-      <div class="gacha-br-qr-actions">
-        <button type="button" class="gacha-br-qr-btn gacha-br-qr-btn-copy" id="gacha-br-qr-copy-btn">📋 Copy URL</button>
-        <button type="button" class="gacha-br-qr-btn gacha-br-qr-btn-jukebox" id="gacha-br-qr-jukebox-btn">🎵 Open Jukebox</button>
+      <div class="gacha-bl-qr-actions">
+        <button type="button" class="gacha-bl-qr-btn gacha-bl-qr-btn-copy" id="gacha-bl-qr-copy-btn">📋 Copy URL</button>
+        <button type="button" class="gacha-bl-qr-btn gacha-bl-qr-btn-jukebox" id="gacha-bl-qr-jukebox-btn">🎵 Open Jukebox</button>
       </div>
     `);
 
     // Toggle compact / expanded on click
     qrWidget.addEventListener("click", (e) => {
-      if (e.target.closest(".gacha-br-qr-close") || e.target.closest(".gacha-br-qr-btn")) {
+      if (e.target.closest(".gacha-bl-qr-close, .gacha-br-qr-close") || e.target.closest(".gacha-bl-qr-btn, .gacha-br-qr-btn")) {
         return;
       }
-      qrWidget.classList.toggle("gacha-br-qr-compact");
-      qrWidget.classList.toggle("gacha-br-qr-expanded");
+      qrWidget.classList.toggle("gacha-bl-qr-compact");
+      qrWidget.classList.toggle("gacha-bl-qr-expanded");
     });
 
     // Close button
-    const closeBtn = qrWidget.querySelector(".gacha-br-qr-close");
+    const closeBtn = qrWidget.querySelector(".gacha-bl-qr-close") || qrWidget.querySelector(".gacha-br-qr-close");
     if (closeBtn) {
       closeBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        bottomRightQrDismissed = true;
+        bottomLeftQrDismissed = true;
         qrWidget.classList.add("gacha-hidden");
         document.documentElement.classList.remove("gacha-qr-overlay-active");
       });
     }
 
     // Copy button
-    const copyBtn = qrWidget.querySelector("#gacha-br-qr-copy-btn");
+    const copyBtn = qrWidget.querySelector("#gacha-bl-qr-copy-btn") || qrWidget.querySelector("#gacha-br-qr-copy-btn");
     if (copyBtn) {
       copyBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
@@ -6142,7 +6150,7 @@
     }
 
     // Open Jukebox button
-    const jukeboxBtn = qrWidget.querySelector("#gacha-br-qr-jukebox-btn");
+    const jukeboxBtn = qrWidget.querySelector("#gacha-bl-qr-jukebox-btn") || qrWidget.querySelector("#gacha-br-qr-jukebox-btn");
     if (jukeboxBtn) {
       jukeboxBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -6156,8 +6164,9 @@
     return qrWidget;
   }
 
-  function updateBottomRightQrVisibility() {
-    const shouldShow = Boolean(settings.showBottomRightQr && !bottomRightQrDismissed);
+  function updateBottomLeftQrVisibility() {
+    const isEnabled = Boolean(settings.showBottomLeftQr || settings.showBottomRightQr);
+    const shouldShow = Boolean(isEnabled && !bottomLeftQrDismissed);
     const fullscreenEnabled = settings.showQrInFullscreen !== false;
 
     document.documentElement.classList.toggle("gacha-qr-fullscreen-enabled", fullscreenEnabled);
@@ -6165,7 +6174,7 @@
       document.body.classList.toggle("gacha-qr-fullscreen-enabled", fullscreenEnabled);
     }
 
-    let qrWidget = document.getElementById("gacha-bottom-right-qr");
+    let qrWidget = document.getElementById("gacha-bottom-left-qr") || document.getElementById("gacha-bottom-right-qr");
 
     if (!shouldShow) {
       if (qrWidget) {
@@ -6176,14 +6185,17 @@
     }
 
     if (!qrWidget) {
-      qrWidget = injectBottomRightQrWidget();
+      qrWidget = injectBottomLeftQrWidget();
     } else {
       qrWidget.classList.remove("gacha-hidden");
     }
 
     document.documentElement.classList.add("gacha-qr-overlay-active");
-    renderBottomRightQrCode();
+    renderBottomLeftQrCode();
   }
+
+  const renderBottomRightQrCode = renderBottomLeftQrCode;
+  const updateBottomRightQrVisibility = updateBottomLeftQrVisibility;
 
   // ==========================================================
   // Autoplay Guard (Strictly selects Gacha / Gacha Lyric MVs)
@@ -6624,6 +6636,7 @@
           "autoUnmute",
           "smoothPlayback",
           "preferredResolution",
+          "showBottomLeftQr",
           "showBottomRightQr",
           "showQrInFullscreen"
         ]) {
@@ -6632,8 +6645,8 @@
             changed = true;
           }
         }
-        if (changes.showBottomRightQr !== undefined) {
-          bottomRightQrDismissed = false;
+        if (changes.showBottomLeftQr !== undefined || changes.showBottomRightQr !== undefined) {
+          bottomLeftQrDismissed = false;
         }
         if (changes.smoothPlayback !== undefined) {
           settings.smoothPlayback = changes.smoothPlayback.newValue !== false;

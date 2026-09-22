@@ -1086,7 +1086,7 @@
                     android:paddingHorizontal="8dp" />
             </LinearLayout>
 
-            <!-- Bottom-Right Floating QR Code Switch -->
+            <!-- Bottom-Left Floating QR Code Switch -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -1103,7 +1103,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="📱 Display QR at Bottom Right"
+                        android:text="📱 Display QR at Bottom Left"
                         android:textColor="#FFFFFF"
                         android:textSize="12sp" />
 
@@ -1116,7 +1116,7 @@
                 </LinearLayout>
 
                 <com.google.android.material.switchmaterial.SwitchMaterial
-                    android:id="@+id/switch_bottom_right_qr"
+                    android:id="@+id/switch_bottom_left_qr"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:checked="false"

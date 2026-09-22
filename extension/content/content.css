@@ -19,9 +19,12 @@ body.gacha-player-fullscreen #gacha-skip-overlay,
   pointer-events: none !important;
 }
 
-/* Bottom-Right QR Fullscreen Rules */
+/* Bottom-Left QR Fullscreen Rules */
+html:not(.gacha-qr-fullscreen-enabled):has(.ytp-fullscreen) #gacha-bottom-left-qr,
 html:not(.gacha-qr-fullscreen-enabled):has(.ytp-fullscreen) #gacha-bottom-right-qr,
+html:not(.gacha-qr-fullscreen-enabled):has(ytd-watch-flexy[fullscreen]) #gacha-bottom-left-qr,
 html:not(.gacha-qr-fullscreen-enabled):has(ytd-watch-flexy[fullscreen]) #gacha-bottom-right-qr,
+html:not(.gacha-qr-fullscreen-enabled) body.gacha-player-fullscreen #gacha-bottom-left-qr,
 html:not(.gacha-qr-fullscreen-enabled) body.gacha-player-fullscreen #gacha-bottom-right-qr {
   display: none !important;
   visibility: hidden !important;
@@ -29,16 +32,25 @@ html:not(.gacha-qr-fullscreen-enabled) body.gacha-player-fullscreen #gacha-botto
   pointer-events: none !important;
 }
 
+html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-left-qr,
 html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-right-qr,
+html.gacha-qr-fullscreen-enabled:has(ytd-watch-flexy[fullscreen]) #gacha-bottom-left-qr,
 html.gacha-qr-fullscreen-enabled:has(ytd-watch-flexy[fullscreen]) #gacha-bottom-right-qr,
+html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-left-qr,
 html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-right-qr {
   display: flex !important;
   visibility: visible !important;
-  opacity: 0.85 !important;
+  opacity: 0.4 !important;
 }
 
+html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-left-qr:hover,
+html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-left-qr:focus-within,
 html.gacha-qr-fullscreen-enabled:has(.ytp-fullscreen) #gacha-bottom-right-qr:hover,
+html.gacha-qr-fullscreen-enabled:has(ytd-watch-flexy[fullscreen]) #gacha-bottom-left-qr:hover,
+html.gacha-qr-fullscreen-enabled:has(ytd-watch-flexy[fullscreen]) #gacha-bottom-left-qr:focus-within,
 html.gacha-qr-fullscreen-enabled:has(ytd-watch-flexy[fullscreen]) #gacha-bottom-right-qr:hover,
+html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-left-qr:hover,
+html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-left-qr:focus-within,
 html.gacha-qr-fullscreen-enabled body.gacha-player-fullscreen #gacha-bottom-right-qr:hover {
   opacity: 1 !important;
 }
@@ -839,12 +851,14 @@ select.gacha-time-input option:hover {
 }
 
 /* ==========================================================
-   Bottom-Right Remote QR Code Overlay Badge
+   Bottom-Left Remote QR Code Overlay Badge
    ========================================================== */
+#gacha-bottom-left-qr,
 #gacha-bottom-right-qr {
   position: fixed !important;
   bottom: 20px !important;
-  right: 20px !important;
+  left: 20px !important;
+  right: auto !important;
   z-index: 2147483646 !important;
   display: flex !important;
   flex-direction: column !important;
@@ -859,21 +873,28 @@ select.gacha-time-input option:hover {
   cursor: pointer !important;
   user-select: none !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  opacity: 0.4 !important;
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease !important;
   pointer-events: auto !important;
   box-sizing: border-box !important;
 }
 
+#gacha-bottom-left-qr.gacha-hidden,
 #gacha-bottom-right-qr.gacha-hidden {
   display: none !important;
 }
 
-#gacha-bottom-right-qr:hover {
+#gacha-bottom-left-qr:hover,
+#gacha-bottom-left-qr:focus-within,
+#gacha-bottom-right-qr:hover,
+#gacha-bottom-right-qr:focus-within {
+  opacity: 1 !important;
   border-color: #ff2e93 !important;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65), 0 0 20px rgba(255, 46, 147, 0.5) !important;
 }
 
 /* Close / Dismiss Button */
+.gacha-bl-qr-close,
 .gacha-br-qr-close {
   position: absolute !important;
   top: -8px !important;
@@ -898,17 +919,23 @@ select.gacha-time-input option:hover {
   padding: 0 !important;
 }
 
+#gacha-bottom-left-qr:hover .gacha-bl-qr-close,
+#gacha-bottom-left-qr:focus-within .gacha-bl-qr-close,
+#gacha-bottom-left-qr:hover .gacha-br-qr-close,
+#gacha-bottom-left-qr:focus-within .gacha-br-qr-close,
 #gacha-bottom-right-qr:hover .gacha-br-qr-close,
 #gacha-bottom-right-qr:focus-within .gacha-br-qr-close {
   opacity: 1 !important;
 }
 
+.gacha-bl-qr-close:hover,
 .gacha-br-qr-close:hover {
   transform: scale(1.15) !important;
   background: #ff0055 !important;
 }
 
 /* QR Code Box */
+.gacha-bl-qr-box,
 .gacha-br-qr-box {
   background: #ffffff !important;
   padding: 4px !important;
@@ -921,15 +948,23 @@ select.gacha-time-input option:hover {
 }
 
 /* Compact Mode */
+#gacha-bottom-left-qr.gacha-bl-qr-compact,
+#gacha-bottom-left-qr.gacha-br-qr-compact,
 #gacha-bottom-right-qr.gacha-br-qr-compact {
   max-width: 95px !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-compact .gacha-bl-qr-box,
+#gacha-bottom-left-qr.gacha-br-qr-compact .gacha-br-qr-box,
 #gacha-bottom-right-qr.gacha-br-qr-compact .gacha-br-qr-box {
   width: 72px !important;
   height: 72px !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-compact .gacha-bl-qr-box svg,
+#gacha-bottom-left-qr.gacha-bl-qr-compact .gacha-bl-qr-box img,
+#gacha-bottom-left-qr.gacha-br-qr-compact .gacha-br-qr-box svg,
+#gacha-bottom-left-qr.gacha-br-qr-compact .gacha-br-qr-box img,
 #gacha-bottom-right-qr.gacha-br-qr-compact .gacha-br-qr-box svg,
 #gacha-bottom-right-qr.gacha-br-qr-compact .gacha-br-qr-box img {
   width: 100% !important;
@@ -938,16 +973,25 @@ select.gacha-time-input option:hover {
 }
 
 /* Expanded Mode */
+#gacha-bottom-left-qr.gacha-bl-qr-expanded,
+#gacha-bottom-left-qr.gacha-br-qr-expanded,
 #gacha-bottom-right-qr.gacha-br-qr-expanded {
   max-width: 190px !important;
   padding: 12px !important;
+  opacity: 1 !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-box,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-box,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-box {
   width: 150px !important;
   height: 150px !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-box svg,
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-box img,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-box svg,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-box img,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-box svg,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-box img {
   width: 100% !important;
@@ -956,6 +1000,7 @@ select.gacha-time-input option:hover {
 }
 
 /* QR Info Label & Room Code */
+.gacha-bl-qr-info,
 .gacha-br-qr-info {
   display: flex !important;
   flex-direction: column !important;
@@ -965,6 +1010,7 @@ select.gacha-time-input option:hover {
   width: 100% !important;
 }
 
+.gacha-bl-qr-label,
 .gacha-br-qr-label {
   font-size: 10px !important;
   font-weight: 700 !important;
@@ -973,6 +1019,7 @@ select.gacha-time-input option:hover {
   text-shadow: 0 0 6px rgba(0, 229, 255, 0.5) !important;
 }
 
+.gacha-bl-qr-room,
 .gacha-br-qr-room {
   font-size: 9.5px !important;
   font-weight: 800 !important;
@@ -982,17 +1029,22 @@ select.gacha-time-input option:hover {
   text-shadow: 0 0 6px rgba(255, 46, 147, 0.5) !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-label,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-label,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-label {
   font-size: 12px !important;
   margin-bottom: 2px !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-room,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-room,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-room {
   font-size: 11px !important;
   margin-bottom: 6px !important;
 }
 
 /* Action Buttons in Expanded Mode */
+.gacha-bl-qr-actions,
 .gacha-br-qr-actions {
   display: none !important;
   width: 100% !important;
@@ -1001,10 +1053,13 @@ select.gacha-time-input option:hover {
   margin-top: 6px !important;
 }
 
+#gacha-bottom-left-qr.gacha-bl-qr-expanded .gacha-bl-qr-actions,
+#gacha-bottom-left-qr.gacha-br-qr-expanded .gacha-br-qr-actions,
 #gacha-bottom-right-qr.gacha-br-qr-expanded .gacha-br-qr-actions {
   display: flex !important;
 }
 
+.gacha-bl-qr-btn,
 .gacha-br-qr-btn {
   width: 100% !important;
   padding: 5px 8px !important;
@@ -1020,27 +1075,26 @@ select.gacha-time-input option:hover {
   gap: 4px !important;
 }
 
+.gacha-bl-qr-btn-copy,
 .gacha-br-qr-btn-copy {
   background: rgba(0, 229, 255, 0.18) !important;
   color: #00e5ff !important;
 }
 
+.gacha-bl-qr-btn-copy:hover,
 .gacha-br-qr-btn-copy:hover {
   background: rgba(0, 229, 255, 0.35) !important;
 }
 
+.gacha-bl-qr-btn-jukebox,
 .gacha-br-qr-btn-jukebox {
   background: linear-gradient(135deg, #ff2e93, #7928ca) !important;
   color: #ffffff !important;
 }
 
+.gacha-bl-qr-btn-jukebox:hover,
 .gacha-br-qr-btn-jukebox:hover {
   filter: brightness(1.15) !important;
-}
-
-/* Adjust floating Jukebox button offset if QR code is visible alongside it */
-html.gacha-qr-overlay-active:not(.gacha-android-app) #gacha-floating-widget {
-  bottom: 140px !important;
 }
 
 /* ==========================================================

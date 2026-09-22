@@ -309,7 +309,7 @@ public class MainActivity extends AppCompatActivity {
         com.google.android.material.switchmaterial.SwitchMaterial swRemotePin = view.findViewById(R.id.switch_remote_pin);
         LinearLayout layoutPinInput = view.findViewById(R.id.layout_pin_input);
         EditText etRemotePin = view.findViewById(R.id.et_remote_pin);
-        com.google.android.material.switchmaterial.SwitchMaterial swBottomRightQr = view.findViewById(R.id.switch_bottom_right_qr);
+        com.google.android.material.switchmaterial.SwitchMaterial swBottomLeftQr = view.findViewById(R.id.switch_bottom_left_qr);
         View layoutQrFullscreen = view.findViewById(R.id.layout_qr_fullscreen);
         com.google.android.material.switchmaterial.SwitchMaterial swQrFullscreen = view.findViewById(R.id.switch_qr_fullscreen);
 
@@ -341,7 +341,7 @@ public class MainActivity extends AppCompatActivity {
         boolean remoteEnabled = sp.getBoolean("remoteServerEnabled", true);
         boolean remotePinEnabled = sp.getBoolean("remotePinEnabled", false);
         String remotePin = sp.getString("remotePin", "1234");
-        boolean showBottomRightQr = sp.getBoolean("showBottomRightQr", false);
+        boolean showBottomLeftQr = sp.getBoolean("showBottomLeftQr", sp.getBoolean("showBottomRightQr", false));
         boolean showQrInFullscreen = sp.getBoolean("showQrInFullscreen", true);
         float boost = sp.getFloat("volumeBoost", 100f);
 
@@ -464,8 +464,8 @@ public class MainActivity extends AppCompatActivity {
         if (layoutPinInput != null) layoutPinInput.setVisibility(remotePinEnabled ? View.VISIBLE : View.GONE);
         if (etRemotePin != null) etRemotePin.setText(remotePin);
 
-        if (swBottomRightQr != null) swBottomRightQr.setChecked(showBottomRightQr);
-        if (layoutQrFullscreen != null) layoutQrFullscreen.setVisibility(showBottomRightQr ? View.VISIBLE : View.GONE);
+        if (swBottomLeftQr != null) swBottomLeftQr.setChecked(showBottomLeftQr);
+        if (layoutQrFullscreen != null) layoutQrFullscreen.setVisibility(showBottomLeftQr ? View.VISIBLE : View.GONE);
         if (swQrFullscreen != null) swQrFullscreen.setChecked(showQrInFullscreen);
 
         if (tvBadge != null) {
@@ -572,7 +572,9 @@ public class MainActivity extends AppCompatActivity {
             if (layoutPinInput != null) layoutPinInput.setVisibility(isChecked ? View.VISIBLE : View.GONE);
         });
 
-        autoSaveSetting(swBottomRightQr, "showBottomRightQr", isChecked -> {
+        autoSaveSetting(swBottomLeftQr, "showBottomLeftQr", isChecked -> {
+            sp.edit().putBoolean("showBottomRightQr", isChecked).apply();
+            syncSettingToWebView("showBottomRightQr", isChecked);
             if (layoutQrFullscreen != null) layoutQrFullscreen.setVisibility(isChecked ? View.VISIBLE : View.GONE);
         });
         autoSaveSetting(swQrFullscreen, "showQrInFullscreen", null);
@@ -796,7 +798,7 @@ public class MainActivity extends AppCompatActivity {
             "autoplayGuard", "autoUnmute", "smoothPlayback", "filterOfficialVideos", "skipNonMusic", "skipIntroOutro",
             "skipSponsor", "showPoiHighlights", "useSponsorBlockApi", "useCustomDb",
             "useNasServer", "nasAutoSync", "remoteServerEnabled", "remotePinEnabled",
-            "showBottomRightQr", "showQrInFullscreen"
+            "showBottomLeftQr", "showBottomRightQr", "showQrInFullscreen"
     ));
 
     private void applySmoothPlayback(boolean smooth) {

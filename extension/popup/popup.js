@@ -77,7 +77,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnPopupNasImport = document.getElementById("btnPopupNasImport");
 
   const toggleRemoteServer = document.getElementById("toggleRemoteServer");
-  const toggleBottomRightQr = document.getElementById("toggleBottomRightQr");
+  const toggleBottomLeftQr = document.getElementById("toggleBottomLeftQr") || document.getElementById("toggleBottomRightQr");
   const toggleQrFullscreen = document.getElementById("toggleQrFullscreen");
   const rowQrFullscreen = document.getElementById("rowQrFullscreen");
   const popupRemoteDetails = document.getElementById("popupRemoteDetails");
@@ -188,6 +188,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       preferredResolution: "auto",
       remoteServerEnabled: true,
       remoteServerUrl: "",
+      showBottomLeftQr: false,
       showBottomRightQr: false,
       showQrInFullscreen: true
     });
@@ -230,9 +231,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       toggleRemoteServer.checked = settings.remoteServerEnabled !== false;
       if (popupRemoteDetails) popupRemoteDetails.classList.toggle("hidden", settings.remoteServerEnabled === false);
     }
-    if (toggleBottomRightQr) {
-      toggleBottomRightQr.checked = settings.showBottomRightQr === true;
-      if (rowQrFullscreen) rowQrFullscreen.style.display = settings.showBottomRightQr ? "flex" : "none";
+    const isQrActive = Boolean(settings.showBottomLeftQr || settings.showBottomRightQr);
+    if (toggleBottomLeftQr) {
+      toggleBottomLeftQr.checked = isQrActive;
+      if (rowQrFullscreen) rowQrFullscreen.style.display = isQrActive ? "flex" : "none";
     }
     if (toggleQrFullscreen) {
       toggleQrFullscreen.checked = settings.showQrInFullscreen !== false;
@@ -593,11 +595,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  if (toggleBottomRightQr) {
-    toggleBottomRightQr.addEventListener("change", async (e) => {
+  if (toggleBottomLeftQr) {
+    toggleBottomLeftQr.addEventListener("change", async (e) => {
       const isShow = e.target.checked;
       if (rowQrFullscreen) rowQrFullscreen.style.display = isShow ? "flex" : "none";
-      await extStorage.set({ showBottomRightQr: isShow });
+      await extStorage.set({ showBottomLeftQr: isShow, showBottomRightQr: isShow });
     });
   }
 
