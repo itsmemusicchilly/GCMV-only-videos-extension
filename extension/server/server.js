@@ -739,7 +739,7 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         status: "online",
         service: "Gacha MV Player Remote & NAS Server",
-        version: "1.0.3.3",
+        version: "1.0.4",
         serverUrl: serverUrl,
         ip: localIp,
         addresses: addresses,

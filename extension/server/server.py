@@ -704,7 +704,7 @@ class NasHandler(http.server.BaseHTTPRequestHandler):
             resp = {
                 "status": "online",
                 "service": "Gacha MV Player Python Remote & NAS Server",
-                "version": "1.0.3.3",
+                "version": "1.0.4",
                 "serverUrl": server_url,
                 "ip": local_ip,
                 "addresses": addresses,
