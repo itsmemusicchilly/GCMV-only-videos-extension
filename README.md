@@ -44,6 +44,18 @@ The browser extension source code is located in the `extension/` directory.
 
 ### 🚀 Extension Installation
 
+#### ⚡ 1-Click Browser Chooser & Installer (Recommended)
+Launch the interactive installer script to auto-detect your installed browsers (Chrome, Chromium, Firefox, Brave, Edge, Vivaldi, Opera) and load or install with 1 click:
+```bash
+# On Linux / macOS:
+./install-browser-extension.sh
+# or via npm:
+npm run install:extension
+
+# On Windows:
+# Double-click install-browser-extension.bat
+```
+
 #### 📱 Android Browsers (Kiwi Browser & Lemur Browser)
 1. Download `extension/gcmv-extension.zip`.
 2. In Kiwi or Lemur Browser, navigate to `chrome://extensions` and enable **Developer mode**.
@@ -75,6 +87,8 @@ npm run build:extension
 ```
 ├── GachaMVPlayer-YouTube.apk   # Ready-to-install Android APK
 ├── build-apk.sh                # 1-Click APK build script
+├── install-browser-extension.sh # 1-Click interactive browser chooser & installer
+├── install-browser-extension.bat # Windows browser installer
 ├── package.json                # NPM build scripts
 ├── android-app/                # Android WebView app source code
 │   ├── app/

@@ -6,6 +6,7 @@
     "build:apk": "./build-apk.sh",
     "build:extension": "cd extension && bash package.sh",
     "build:all": "npm run build:extension && npm run build:apk",
+    "install:extension": "./install-browser-extension.sh",
     "start:nas": "./start-nas-server.sh"
   },
   "keywords": [
