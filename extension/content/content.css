@@ -61,6 +61,23 @@ html.gacha-android-app .gacha-float-btn {
   display: none !important;
 }
 
+/* Keep the same chip row the extension shows under the masthead.
+   On m.youtube.com the top bar is fixed, so the row sticks just below it. */
+html.gacha-android-app #gacha-chips-host {
+  display: block !important;
+  position: sticky;
+  top: 48px;
+  z-index: 30;
+  width: 100%;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+html.gacha-android-app #gacha-chips-host #gacha-search-chips-bar {
+  pointer-events: auto !important;
+  margin: 8px !important;
+}
+
 html.gacha-android-app #gacha-floating-widget {
   bottom: 0 !important;
   right: 0 !important;

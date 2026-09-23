@@ -17,8 +17,15 @@ if (typeof importScripts === "function" && typeof Paho === "undefined") {
 const extensionApi = typeof browser !== "undefined" ? browser : chrome;
 const runtime = extensionApi.runtime;
 
-let cloudMqttClient = null;
+let cloudMqttClients = [];
 let activeRoomCode = "";
+let lastHandledBgCmdKey = "";
+let lastHandledBgCmdTime = 0;
+
+const MQTT_BROKERS = [
+  { name: "EMQX", host: "broker.emqx.io", port: 8084, path: "/mqtt", ssl: true },
+  { name: "HiveMQ", host: "broker.hivemq.com", port: 8884, path: "/mqtt", ssl: true }
+];
 let cachedPlayerState = {
   currentVideo: null,
   isPlaying: false,
@@ -51,24 +58,34 @@ function generateRoomCode() {
 }
 
 function broadcastCloudState() {
-  if (!cloudMqttClient || !cloudMqttClient.isConnected()) return;
+  if (!cloudMqttClients || cloudMqttClients.length === 0) return;
   const cleanCode = activeRoomCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!cleanCode) return;
   const stateTopic = `gcmv/room/${cleanCode}/state`;
 
   try {
     const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
     if (!PahoLib || !PahoLib.MQTT) return;
-    const msg = new PahoLib.MQTT.Message(JSON.stringify({
+    const payload = JSON.stringify({
       type: "STATE",
       currentVideo: cachedPlayerState.currentVideo,
       isPlaying: cachedPlayerState.isPlaying,
       volume: cachedPlayerState.volume,
       loopMode: cachedPlayerState.loopMode || "off",
       queue: cachedPlayerState.queue
-    }));
-    msg.destinationName = stateTopic;
-    msg.retained = true;
-    cloudMqttClient.send(msg);
+    });
+    cloudMqttClients.forEach(client => {
+      if (client && client.isConnected()) {
+        try {
+          const msg = new PahoLib.MQTT.Message(payload);
+          msg.destinationName = stateTopic;
+          msg.retained = true;
+          client.send(msg);
+        } catch (e) {
+          console.warn("[GCMV] Background MQTT broadcast error on client:", e);
+        }
+      }
+    });
   } catch (e) {
     console.warn("[GCMV] Error broadcasting cloud state:", e);
   }
@@ -76,6 +93,14 @@ function broadcastCloudState() {
 
 async function handleCloudRemoteCommand(cmd) {
   if (!cmd || !cmd.action) return;
+
+  const cmdKey = cmd.cmdId || (cmd.action + ":" + (cmd.videoId || "") + ":" + (cmd.query || "") + ":" + (cmd.value != null ? cmd.value : ""));
+  const now = Date.now();
+  if (cmdKey && cmdKey === lastHandledBgCmdKey && (now - lastHandledBgCmdTime < 1500) && cmd.action !== "get_state") {
+    return;
+  }
+  lastHandledBgCmdKey = cmdKey;
+  lastHandledBgCmdTime = now;
 
   if (cmd.action === "get_state") {
     broadcastCloudState();
@@ -126,51 +151,67 @@ async function initCloudRemoteHost() {
     }
 
     const cleanCode = activeRoomCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const clientId = "gcmv-host-" + Math.random().toString(36).substring(2, 10);
-    const cmdTopic = `gcmv/room/${cleanCode}/cmd`;
+    if (!cleanCode) return;
 
-    if (cloudMqttClient) {
-      try { cloudMqttClient.disconnect(); } catch (_) {}
-      cloudMqttClient = null;
+    if (cloudMqttClients.some(c => c && c.isConnected())) {
+      return;
     }
 
-    const client = new PahoLib.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
+    cloudMqttClients.forEach(c => {
+      try { c.disconnect(); } catch (_) {}
+    });
+    cloudMqttClients = [];
 
-    client.onConnectionLost = (resp) => {
-      console.warn("[GCMV] Background Cloud MQTT connection lost:", resp ? resp.errorMessage : "");
-      setTimeout(() => { initCloudRemoteHost(); }, 5000);
-    };
+    const cmdTopic = `gcmv/room/${cleanCode}/cmd`;
 
-    client.onMessageArrived = (msg) => {
+    MQTT_BROKERS.forEach(broker => {
       try {
-        const payload = JSON.parse(msg.payloadString);
-        handleCloudRemoteCommand(payload);
-      } catch (e) {
-        console.warn("[GCMV] Invalid MQTT command payload:", e);
-      }
-    };
+        const clientId = "gcmv-bg-" + Math.random().toString(36).substring(2, 10);
+        const client = new PahoLib.MQTT.Client(broker.host, broker.port, broker.path, clientId);
 
-    client.connect({
-      useSSL: true,
-      timeout: 8,
-      keepAliveInterval: 30,
-      cleanSession: true,
-      onSuccess: () => {
-        console.log(`[GCMV] 🌸 Cloud Remote Host online in background! Room: ${cleanCode}`);
-        cloudMqttClient = client;
-        client.subscribe(cmdTopic, {
+        client.onConnectionLost = (resp) => {
+          console.warn(`[GCMV] Background Cloud MQTT (${broker.name}) lost:`, resp ? resp.errorMessage : "");
+          cloudMqttClients = cloudMqttClients.filter(c => c !== client);
+          if (cloudMqttClients.length === 0) {
+            setTimeout(() => { initCloudRemoteHost(); }, 3000);
+          }
+        };
+
+        client.onMessageArrived = (msg) => {
+          try {
+            const payload = JSON.parse(msg.payloadString);
+            handleCloudRemoteCommand(payload);
+          } catch (e) {
+            console.warn("[GCMV] Invalid MQTT command payload:", e);
+          }
+        };
+
+        client.connect({
+          useSSL: broker.ssl,
+          timeout: 4,
+          keepAliveInterval: 30,
+          cleanSession: true,
           onSuccess: () => {
-            console.log(`[GCMV] Subscribed to ${cmdTopic}`);
-            broadcastCloudState();
+            console.log(`[GCMV] 🌸 Cloud Remote Host online in background via ${broker.name}! Room: ${cleanCode}`);
+            if (!cloudMqttClients.includes(client)) {
+              cloudMqttClients.push(client);
+            }
+            client.subscribe(cmdTopic, {
+              onSuccess: () => {
+                console.log(`[GCMV] Subscribed to ${cmdTopic} on ${broker.name}`);
+                broadcastCloudState();
+              },
+              onFailure: (err) => {
+                console.warn(`[GCMV] Failed to subscribe to ${cmdTopic} on ${broker.name}:`, err);
+              }
+            });
           },
           onFailure: (err) => {
-            console.warn("[GCMV] Failed to subscribe to cmdTopic:", err);
+            console.warn(`[GCMV] Failed to connect to ${broker.name} in background:`, err ? err.errorMessage : "");
           }
         });
-      },
-      onFailure: (err) => {
-        console.warn("[GCMV] Failed to connect to HiveMQ, retrying in 8s:", err ? err.errorMessage : "");
-        setTimeout(() => { initCloudRemoteHost(); }, 8000);
+      } catch (e) {
+        console.warn(`[GCMV] Error connecting to ${broker.name} in background:`, e);
       }
     });
   } catch (e) {

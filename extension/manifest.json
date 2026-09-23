@@ -47,7 +47,20 @@
         "*://youtube.com/*"
       ],
       "js": [
+        "content/main_world.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://m.youtube.com/*",
+        "*://youtube.com/*"
+      ],
+      "js": [
         "content/qrcode.min.js",
+        "content/paho-mqtt-min.js",
         "content/peerjs.min.js",
         "content/content.js"
       ],

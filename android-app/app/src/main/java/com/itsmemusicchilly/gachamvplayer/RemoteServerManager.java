@@ -415,6 +415,7 @@ public class RemoteServerManager {
 
     public String searchYouTube(String query) {
         if (query == null || query.trim().isEmpty()) return "[]";
+        String finalQuery = MainActivity.formatGachaSearchQuery(this.context, query);
         HttpURLConnection conn = null;
         try {
             URL url = new URL("https://www.youtube.com/youtubei/v1/search?prettyPrint=false");
@@ -438,7 +439,7 @@ public class RemoteServerManager {
             JSONObject context = new JSONObject();
             context.put("client", client);
             body.put("context", context);
-            body.put("query", query.trim());
+            body.put("query", finalQuery.trim());
             byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
             conn.setFixedLengthStreamingMode(payload.length);
             try (OutputStream os = conn.getOutputStream()) {
@@ -542,7 +543,27 @@ public class RemoteServerManager {
         if (videoId != null && !videoId.isEmpty()) this.currentVideoId = videoId;
         if (title != null && !title.isEmpty()) this.currentTitle = title;
         this.isPlaying = playing;
-        if (volume > 0) this.currentVolume = volume;
+        if (volume >= 0) this.currentVolume = volume;
+    }
+
+    public JSONObject buildCloudState(String roomCode, String loopMode, boolean pinRequired) {
+        JSONObject state = new JSONObject();
+        try {
+            JSONObject video = new JSONObject();
+            video.put("videoId", currentVideoId == null ? "" : currentVideoId);
+            video.put("title", currentTitle == null ? "" : currentTitle);
+            video.put("currentTime", 0);
+            video.put("duration", 0);
+            state.put("type", "STATE");
+            state.put("currentVideo", video);
+            state.put("isPlaying", isPlaying);
+            state.put("volume", currentVolume);
+            state.put("loopMode", loopMode == null ? "off" : loopMode);
+            state.put("queue", getQueueArray());
+            state.put("roomCode", roomCode == null ? "" : roomCode);
+            state.put("pinRequired", pinRequired);
+        } catch (Exception ignored) {}
+        return state;
     }
 
     public List<QueueItem> getQueue() {
@@ -778,7 +799,7 @@ public class RemoteServerManager {
                     String q = "";
                     if (!query.isEmpty()) {
                         for (String param : query.split("&")) {
-                            String[] pair = param.split("=");
+                            String[] pair = param.split("=", 2);
                             if (pair.length >= 2 && "q".equals(pair[0])) {
                                 try {
                                     q = URLDecoder.decode(pair[1], "UTF-8");
@@ -837,7 +858,7 @@ public class RemoteServerManager {
                 // API: Add to Queue
                 if ("/api/queue".equals(path) && "POST".equals(method)) {
                     JSONObject json = new JSONObject(body.isEmpty() ? "{}" : body);
-                    String urlOrId = json.optString("url", "").trim();
+                    String urlOrId = json.optString("url", json.optString("videoId", "")).trim();
                     String title = json.optString("title", "").trim();
                     String action = json.optString("action", "add_queue").trim(); // play_now, play_next, add_queue
 
@@ -890,7 +911,7 @@ public class RemoteServerManager {
                 String action = json.optString("action", "").trim(); // play, pause, next, prev, set_loop, volume, play_now
                 Object val = json.has("mode") ? json.opt("mode") : json.opt("value");
 
-                if ("next".equals(action)) {
+                if ("next".equals(action) || "skip".equals(action)) {
                     QueueItem next = popNextQueuedVideo();
                     if (next != null) {
                         mainHandler.post(() -> {
@@ -898,7 +919,7 @@ public class RemoteServerManager {
                         });
                     } else {
                         mainHandler.post(() -> {
-                            if (listener != null) listener.onControlAction("next", null);
+                            if (listener != null) listener.onControlAction("skip", null);
                         });
                     }
                 } else if ("play_now".equals(action)) {

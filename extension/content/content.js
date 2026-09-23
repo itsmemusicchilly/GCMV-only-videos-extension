@@ -1428,13 +1428,8 @@
     if (!player) return;
 
     if (target === "auto") {
-      if (lastAppliedResVideoId === currentVid && lastAppliedResChoice === "auto") return;
-      if (typeof player.setPlaybackQualityRange === "function") {
-        try { player.setPlaybackQualityRange("auto", "auto"); } catch (e) {}
-      }
-      if (typeof player.setPlaybackQuality === "function") {
-        try { player.setPlaybackQuality("auto"); } catch (e) {}
-      }
+      // Auto is already the player default. setPlaybackQuality("auto") after
+      // playback has started reloads the stream and jumps back to 0:00.
       qualityAttemptedForVideoId = currentVid;
       lastAppliedResVideoId = currentVid;
       lastAppliedResChoice = "auto";
@@ -1455,6 +1450,18 @@
     // Single-attempt per video guard to prevent repeated menu opening loops
     const isManualChange = reason === "drawer-change" || reason === "popup-change" || reason === "storage-changed" || reason === "user-select";
     if (!isManualChange && qualityAttemptedForVideoId === currentVid) {
+      return;
+    }
+    // Opening the quality menu or calling setPlaybackQuality after the video
+    // is already underway reloads the stream from the beginning.
+    if (
+      !isManualChange &&
+      video &&
+      !video.ended &&
+      isFinite(video.currentTime) &&
+      video.currentTime > 1.5
+    ) {
+      qualityAttemptedForVideoId = currentVid;
       return;
     }
 
@@ -1507,12 +1514,29 @@
       return;
     }
 
+    const resumeAt =
+      video && !video.ended && isFinite(video.currentTime) && video.currentTime > 1.5
+        ? video.currentTime
+        : null;
     try {
       if (chosenCode && typeof player.setPlaybackQualityRange === "function") {
         player.setPlaybackQualityRange(chosenCode, chosenCode);
       }
       if (chosenCode && typeof player.setPlaybackQuality === "function") {
         player.setPlaybackQuality(chosenCode);
+      }
+      if (resumeAt != null && video) {
+        const restorePlayhead = () => {
+          try {
+            if (video.isConnected && !video.ended && video.currentTime < resumeAt - 1.5) {
+              video.currentTime = resumeAt;
+            }
+          } catch (_) {}
+        };
+        video.addEventListener("loadeddata", restorePlayhead, { once: true });
+        video.addEventListener("emptied", restorePlayhead, { once: true });
+        setTimeout(restorePlayhead, 400);
+        setTimeout(restorePlayhead, 1200);
       }
       try {
         const qualityPref = JSON.stringify({
@@ -1587,9 +1611,17 @@
     const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
 
+    // .ytp-ad-module is present on a normal watch page once the player UI
+    // finishes loading. Treating that as an ad seeks the real video and the
+    // player reloads it from the start.
+    const playerHasAdClass = Boolean(
+      player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))
+    );
     const isAdActive =
-      Boolean(player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))) ||
-      document.querySelector(".ytp-ad-player-overlay, .ytp-ad-module:not(:empty), .ytp-ad-text, .ytp-ad-preview-container") !== null;
+      playerHasAdClass ||
+      document.querySelector(
+        ".ytp-ad-player-overlay, .ytp-ad-preview-container, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button"
+      ) !== null;
 
     // Fast-path: When no ad is playing and wasn't playing, skip all heavy DOM queries
     if (!isAdActive && !wasAdPlaying) {
@@ -1603,25 +1635,33 @@
     dismissEnforcementModals();
 
     if (isAdActive && video) {
-      if (!wasAdPlaying) {
-        wasAdPlaying = true;
-        userMutedStateBeforeAd = video.muted;
-        userPlaybackRateBeforeAd = video.playbackRate > 0 && video.playbackRate <= 4 ? video.playbackRate : 1;
-      }
+      if (playerHasAdClass) {
+        if (!wasAdPlaying) {
+          wasAdPlaying = true;
+          userMutedStateBeforeAd = video.muted;
+          userPlaybackRateBeforeAd = video.playbackRate > 0 && video.playbackRate <= 4 ? video.playbackRate : 1;
+        }
 
-      // Silence audio during ads
-      if (!video.muted) {
-        video.muted = true;
-      }
+        // Silence audio during ads
+        if (!video.muted) {
+          video.muted = true;
+        }
 
-      // Fast forward at 16x speed
-      if (video.playbackRate !== 16) {
-        video.playbackRate = 16.0;
-      }
+        // Fast forward at 16x speed
+        if (video.playbackRate !== 16) {
+          video.playbackRate = 16.0;
+        }
 
-      // Jump to the end of the ad if valid duration is present
-      if (!isNaN(video.duration) && isFinite(video.duration) && video.duration > 0) {
-        video.currentTime = video.duration;
+        // Only seek when the element is actually playing a short ad. Seeking a
+        // full MV to its duration ends it and the player starts it over.
+        if (
+          !isNaN(video.duration) &&
+          isFinite(video.duration) &&
+          video.duration > 0 &&
+          video.duration < 90
+        ) {
+          video.currentTime = video.duration;
+        }
       }
 
       // Auto-click all YouTube skip button variants
@@ -3037,6 +3077,11 @@
 
   function dispatchMainWorldPlayerAction(action, param = "") {
     try {
+      window.dispatchEvent(new CustomEvent("GCMV_MAIN_WORLD_CMD", {
+        detail: { action, videoId: param, param }
+      }));
+    } catch (_) {}
+    try {
       const nonceEl = document.querySelector("script[nonce]");
       const s = document.createElement("script");
       if (nonceEl) {
@@ -3091,6 +3136,9 @@
       captureCurrentMixState();
       const item = cloudRemoteQueue.shift();
       extStorage.set({ cloudRemoteQueue }).catch(() => {});
+      if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {
+        try { window.AndroidBridge.popNextQueuedVideo(); } catch (_) {}
+      }
       broadcastCloudState();
       if (typeof refreshInpageQueue === "function") refreshInpageQueue();
       showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
@@ -3141,6 +3189,10 @@
 
     const initialVid = getCurrentVideoId();
     const wasFullscreen = isPlayerMediaFullscreen();
+    if (wasFullscreen) {
+      saveFullscreenStateBeforeNavigate();
+      checkAndRestoreFullscreen();
+    }
     showToast("⏭️ Skipping to next track... 🌸");
     ensureYoutubeAutoplayToggleOn();
 
@@ -3381,7 +3433,15 @@
   let cloudConnections = [];
   let cloudRoomCode = "";
   let cloudRemoteQueue = [];
-  let cloudMqttClient = null;
+  let cloudMqttClients = [];
+  let activeHostRoomCode = "";
+  let lastHandledCmdKey = "";
+  let lastHandledCmdTime = 0;
+
+  const MQTT_BROKERS = [
+    { name: "EMQX", host: "broker.emqx.io", port: 8084, path: "/mqtt", ssl: true },
+    { name: "HiveMQ", host: "broker.hivemq.com", port: 8884, path: "/mqtt", ssl: true }
+  ];
 
   function generateRoomCode() {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -3419,16 +3479,29 @@
   }
 
   function broadcastCloudMqttMessage(obj) {
-    if (!cloudMqttClient || !cloudMqttClient.isConnected()) return;
+    if (window.AndroidBridge && typeof window.AndroidBridge.publishCloudMessage === "function") {
+      try { window.AndroidBridge.publishCloudMessage(JSON.stringify(obj)); } catch (_) {}
+      return;
+    }
+    if (!cloudMqttClients || cloudMqttClients.length === 0) return;
     try {
       const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
       if (!PahoLib || !PahoLib.MQTT) return;
       const cleanCode = (cloudRoomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
       if (!cleanCode) return;
-      const msg = new PahoLib.MQTT.Message(JSON.stringify(obj));
-      msg.destinationName = `gcmv/room/${cleanCode}/state`;
-      msg.retained = (obj.type === "STATE");
-      cloudMqttClient.send(msg);
+      const msgStr = JSON.stringify(obj);
+      cloudMqttClients.forEach(client => {
+        if (client && client.isConnected()) {
+          try {
+            const msg = new PahoLib.MQTT.Message(msgStr);
+            msg.destinationName = `gcmv/room/${cleanCode}/state`;
+            msg.retained = (obj.type === "STATE");
+            client.send(msg);
+          } catch (e) {
+            console.warn("[GCMV] broadcastCloudMqttMessage client error:", e);
+          }
+        }
+      });
     } catch (e) {
       console.warn("[GCMV] broadcastCloudMqttMessage error:", e);
     }
@@ -3481,6 +3554,164 @@
     return { videoId, title, channel, thumbnail };
   }
 
+  const GACHA_SEARCH_TAG_BLOCK = '"GLMV|GL2MV|GCMV|MEP"';
+
+  function formatGachaSearchQuery(rawQuery) {
+    if (!settings.enabled || !settings.autoplayGuard) {
+      return rawQuery;
+    }
+    if (!rawQuery || typeof rawQuery !== "string") {
+      return rawQuery;
+    }
+
+    let q = rawQuery.trim();
+    if (!q) return rawQuery;
+
+    // If query already has the exact tag block, don't duplicate it
+    if (q.includes("GLMV|GL2MV|GCMV|MEP") || q.includes("GLMV|GCMV|GL2MV|MEP")) {
+      return q;
+    }
+
+    // Strip leading/trailing surrounding quotes for clean inspection
+    let unquoted = q.replace(/^["']+|["']+$/g, "").trim();
+
+    // Regex to detect and strip standalone/loose gacha tags
+    const gachaWordsRegex = /\b(glmv|gcmv|gl2mv|mep|gacha(?:\s*(?:life(?:\s*2)?|club|mv|video|animation))?)\b/gi;
+    let coreTitle = unquoted.replace(gachaWordsRegex, "").replace(/\s+/g, " ").trim();
+    coreTitle = coreTitle.replace(/^["']+|["']+$/g, "").trim();
+
+    if (!coreTitle) {
+      return GACHA_SEARCH_TAG_BLOCK;
+    }
+
+    return `"${coreTitle}" ${GACHA_SEARCH_TAG_BLOCK}`;
+  }
+
+  function updateSearchBoxDisplay(query) {
+    if (!query) return;
+    const inputs = document.querySelectorAll(
+      "input#search, input[name='search_query'], input.search-input, input.ytd-searchbox, ytm-searchbox input"
+    );
+    inputs.forEach((input) => {
+      if (input && input.value !== query) {
+        input.value = query;
+      }
+    });
+  }
+
+  let lastGuardedResultsHref = "";
+  function checkAndEnforceSearchResultsGuard() {
+    if (!settings.enabled || !settings.autoplayGuard) return;
+    if (window.location.pathname !== "/results") return;
+    if (window.location.href === lastGuardedResultsHref) return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const query = urlParams.get("search_query");
+    if (!query) return;
+
+    if (query.includes("GLMV|GL2MV|GCMV|MEP") || query.includes("GLMV|GCMV|GL2MV|MEP")) {
+      updateSearchBoxDisplay(query);
+      lastGuardedResultsHref = window.location.href;
+      return;
+    }
+
+    const modifiedQuery = formatGachaSearchQuery(query);
+    if (modifiedQuery && modifiedQuery !== query) {
+      urlParams.set("search_query", modifiedQuery);
+      const newUrl = `${window.location.pathname}?${urlParams.toString()}${window.location.hash || ""}`;
+      lastGuardedResultsHref = newUrl;
+      updateSearchBoxDisplay(modifiedQuery);
+      window.location.replace(newUrl);
+    }
+  }
+
+  let searchInterceptionSetup = false;
+  function setupSearchInterception() {
+    if (searchInterceptionSetup) return;
+    searchInterceptionSetup = true;
+
+    // Intercept Enter key in search boxes
+    document.addEventListener("keydown", (e) => {
+      if (!settings.enabled || !settings.autoplayGuard) return;
+      if (e.key !== "Enter") return;
+
+      const target = e.target;
+      if (!target || !target.matches) return;
+
+      const searchInputSelector = "input[type='search'], input[name='search'], input[name='search_query'], input#search, input.search-input, input.ytd-searchbox, ytm-searchbox input";
+      if (target.matches(searchInputSelector)) {
+        const val = target.value;
+        if (val && val.trim()) {
+          const guarded = formatGachaSearchQuery(val);
+          if (guarded && guarded !== val) {
+            target.value = guarded;
+            target.dispatchEvent(new Event("input", { bubbles: true }));
+            target.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      }
+    }, true);
+
+    // Intercept clicks on search buttons
+    document.addEventListener("click", (e) => {
+      if (!settings.enabled || !settings.autoplayGuard) return;
+      const btn = e.target && e.target.closest && e.target.closest(
+        "button#search-icon-legacy, button.ytd-searchbox, ytm-searchbox button, .search-icon, #search-btn, button[aria-label='Search'], button[type='submit']"
+      );
+      if (!btn) return;
+
+      const input = document.querySelector(
+        "input[type='search'], input[name='search'], input[name='search_query'], input#search, input.search-input, ytm-searchbox input"
+      );
+      if (input && input.value && input.value.trim()) {
+        const guarded = formatGachaSearchQuery(input.value);
+        if (guarded && guarded !== input.value) {
+          input.value = guarded;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    }, true);
+
+    // Intercept pointerdown on suggestions
+    document.addEventListener("pointerdown", (e) => {
+      if (!settings.enabled || !settings.autoplayGuard) return;
+      const suggestionItem = e.target && e.target.closest && e.target.closest(
+        ".sbct, .sbsb_c, .yt-searchbox-desktop-suggestion, ytm-searchbox-suggestion, [role='option']"
+      );
+      if (!suggestionItem) return;
+      const text = (suggestionItem.innerText || suggestionItem.textContent || "").trim();
+      if (text) {
+        const guarded = formatGachaSearchQuery(text);
+        const input = document.querySelector("input[type='search'], input[name='search'], input[name='search_query'], input#search, input.search-input, ytm-searchbox input");
+        if (input && guarded && guarded !== text) {
+          input.value = guarded;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    }, true);
+
+    // Intercept form submit
+    document.addEventListener("submit", (e) => {
+      if (!settings.enabled || !settings.autoplayGuard) return;
+      const form = e.target;
+      if (!form) return;
+
+      if (form.id === "search-form" || (form.matches && form.matches("form.search-form, form[action*='results'], form[action*='search'], ytm-searchbox form"))) {
+        const input = form.querySelector("input[type='search'], input[name='search'], input[name='search_query'], input#search, input.search-input, input.ytd-searchbox, ytm-searchbox input");
+        if (input && input.value && input.value.trim()) {
+          const guarded = formatGachaSearchQuery(input.value);
+          if (guarded && guarded !== input.value) {
+            input.value = guarded;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      }
+    }, true);
+  }
+
   function collectSearchResults(root, limit) {
     const max = limit || 20;
     const results = [];
@@ -3529,6 +3760,7 @@
   }
 
   async function performYouTubeSearch(query) {
+    const finalQuery = formatGachaSearchQuery(query);
     try {
       const context = innertubeSearchContext();
       let endpoint = `${location.origin}/youtubei/v1/search?prettyPrint=false`;
@@ -3547,7 +3779,7 @@
         method: "POST",
         credentials: "same-origin",
         headers,
-        body: JSON.stringify({ context, query })
+        body: JSON.stringify({ context, query: finalQuery })
       });
       if (res.ok) {
         const data = await res.json();
@@ -3559,7 +3791,7 @@
     }
 
     try {
-      const searchUrl = `${location.origin}/results?search_query=${encodeURIComponent(query)}`;
+      const searchUrl = `${location.origin}/results?search_query=${encodeURIComponent(finalQuery)}`;
       const res = await fetch(searchUrl, { credentials: "same-origin" });
       if (!res.ok) return [];
       const html = await res.text();
@@ -3637,6 +3869,13 @@
 
   async function handleCloudRemoteCommand(data, conn) {
     if (!data || typeof data !== "object") return;
+    const cmdKey = data.cmdId || (data.action + ":" + (data.videoId || "") + ":" + (data.query || "") + ":" + (data.value != null ? data.value : ""));
+    const now = Date.now();
+    if (cmdKey && cmdKey === lastHandledCmdKey && (now - lastHandledCmdTime < 1500) && data.action !== "get_state") {
+      return;
+    }
+    lastHandledCmdKey = cmdKey;
+    lastHandledCmdTime = now;
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
 
     // PIN Validation
@@ -3784,15 +4023,25 @@
 
       case "search":
         if (data.query) {
-          const results = await performYouTubeSearch(data.query);
-          if (conn && conn.open) {
-            conn.send({ type: "SEARCH_RESULTS", query: data.query, results });
+          const guardedQuery = formatGachaSearchQuery(data.query);
+          let results = [];
+          try {
+            results = await performYouTubeSearch(guardedQuery);
+          } catch (searchErr) {
+            console.warn("[GCMV] Search failed:", searchErr);
           }
-          broadcastCloudMqttMessage({ type: "SEARCH_RESULTS", query: data.query, results });
+          if ((!results || results.length === 0) && window.AndroidBridge && typeof window.AndroidBridge.searchYouTubeNative === "function") {
+            try { window.AndroidBridge.searchYouTubeNative(guardedQuery); } catch (_) {}
+            break;
+          }
+          if (conn && conn.open) {
+            conn.send({ type: "SEARCH_RESULTS", query: guardedQuery, results });
+          }
+          broadcastCloudMqttMessage({ type: "SEARCH_RESULTS", query: guardedQuery, results });
           try {
             chrome.runtime.sendMessage({
               type: "GCMV_SEARCH_RESULTS",
-              query: data.query,
+              query: guardedQuery,
               results: results
             }, () => {
               if (chrome.runtime.lastError) {}
@@ -3802,6 +4051,14 @@
         break;
     }
   }
+
+  window.__gachaHandleRemoteCommand = function(raw) {
+    let data = raw;
+    if (typeof raw === "string") {
+      try { data = JSON.parse(raw); } catch (_) { return; }
+    }
+    handleCloudRemoteCommand(data, null);
+  };
 
   try {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -3814,6 +4071,10 @@
   } catch (_) {}
 
   function initCloudMqttHost() {
+    if (window.AndroidBridge && typeof window.AndroidBridge.publishCloudMessage === "function") {
+      activeHostRoomCode = (cloudRoomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      return;
+    }
     const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
     if (!PahoLib || !PahoLib.MQTT || !PahoLib.MQTT.Client) {
       console.warn("[GCMV] Paho MQTT not available in content script");
@@ -3821,51 +4082,73 @@
     }
     const cleanCode = (cloudRoomCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (!cleanCode) return;
-    const clientId = "gcmv-host-" + Math.random().toString(36).substring(2, 10);
+
+    // Persistent connection: if already active for this room code and at least one broker connected, don't tear down!
+    if (activeHostRoomCode === cleanCode && cloudMqttClients.some(c => c && c.isConnected())) {
+      console.log(`[GCMV] 🌸 Cloud MQTT already active for room ${cleanCode}`);
+      return;
+    }
+
+    activeHostRoomCode = cleanCode;
+
+    cloudMqttClients.forEach(c => {
+      try { c.disconnect(); } catch (_) {}
+    });
+    cloudMqttClients = [];
+
     const cmdTopic = `gcmv/room/${cleanCode}/cmd`;
 
-    if (cloudMqttClient) {
-      try { cloudMqttClient.disconnect(); } catch (_) {}
-      cloudMqttClient = null;
-    }
+    MQTT_BROKERS.forEach(broker => {
+      try {
+        const clientId = "gcmv-host-" + Math.random().toString(36).substring(2, 10);
+        const client = new PahoLib.MQTT.Client(broker.host, broker.port, broker.path, clientId);
 
-    try {
-      const client = new PahoLib.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
-      client.onConnectionLost = (resp) => {
-        console.warn("[GCMV] Content Cloud MQTT connection lost:", resp ? resp.errorMessage : "");
-        setTimeout(initCloudMqttHost, 6000);
-      };
-      client.onMessageArrived = (msg) => {
-        try {
-          const payload = JSON.parse(msg.payloadString);
-          handleCloudRemoteCommand(payload);
-        } catch (e) {
-          console.warn("[GCMV] Invalid MQTT command payload:", e);
-        }
-      };
-      client.connect({
-        useSSL: true,
-        timeout: 8,
-        keepAliveInterval: 30,
-        cleanSession: true,
-        onSuccess: () => {
-          console.log(`[GCMV] 🌸 Content Cloud Remote MQTT online! Room: ${cleanCode}`);
-          cloudMqttClient = client;
-          client.subscribe(cmdTopic, {
-            onSuccess: () => {
-              broadcastCloudState();
-            },
-            onFailure: (err) => console.warn("[GCMV] Failed to subscribe to cmdTopic:", err)
-          });
-        },
-        onFailure: (err) => {
-          console.warn("[GCMV] Content MQTT connection failed:", err ? err.errorMessage : "");
-          setTimeout(initCloudMqttHost, 8000);
-        }
-      });
-    } catch (e) {
-      console.warn("[GCMV] Error initializing Content MQTT host:", e);
-    }
+        client.onConnectionLost = (resp) => {
+          console.warn(`[GCMV] Host MQTT (${broker.name}) lost:`, resp ? resp.errorMessage : "");
+          cloudMqttClients = cloudMqttClients.filter(c => c !== client);
+          if (activeHostRoomCode === cleanCode && cloudMqttClients.length === 0) {
+            setTimeout(() => {
+              if (activeHostRoomCode === cleanCode && cloudMqttClients.length === 0) {
+                initCloudMqttHost();
+              }
+            }, 3000);
+          }
+        };
+
+        client.onMessageArrived = (msg) => {
+          try {
+            const payload = JSON.parse(msg.payloadString);
+            handleCloudRemoteCommand(payload);
+          } catch (e) {
+            console.warn("[GCMV] Invalid MQTT command payload:", e);
+          }
+        };
+
+        client.connect({
+          useSSL: broker.ssl,
+          timeout: 4,
+          keepAliveInterval: 30,
+          cleanSession: true,
+          onSuccess: () => {
+            console.log(`[GCMV] 🌸 Host MQTT online via ${broker.name}! Room: ${cleanCode}`);
+            if (!cloudMqttClients.includes(client)) {
+              cloudMqttClients.push(client);
+            }
+            client.subscribe(cmdTopic, {
+              onSuccess: () => {
+                broadcastCloudState();
+              },
+              onFailure: (err) => console.warn(`[GCMV] Failed to subscribe on ${broker.name}:`, err)
+            });
+          },
+          onFailure: (err) => {
+            console.warn(`[GCMV] Host MQTT connection to ${broker.name} failed:`, err ? err.errorMessage : "");
+          }
+        });
+      } catch (e) {
+        console.warn(`[GCMV] Host MQTT setup error on ${broker.name}:`, e);
+      }
+    });
   }
 
   async function initCloudRemoteHost() {
@@ -3888,45 +4171,58 @@
 
       initCloudMqttHost();
 
+      if (window.AndroidBridge && typeof window.AndroidBridge.publishCloudMessage === "function") {
+        broadcastCloudState();
+        return;
+      }
+
       if (typeof Peer !== "undefined") {
         const cleanCode = cloudRoomCode.toLowerCase().replace(/[^a-z0-9]/g, "");
         const peerId = `gcmv-${cleanCode}`;
 
-        if (cloudPeer) {
-          try { cloudPeer.destroy(); } catch (_) {}
-        }
-
-        cloudPeer = new Peer(peerId);
-
-        cloudPeer.on("open", (id) => {
-          console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
+        if (cloudPeer && !cloudPeer.destroyed && cloudPeer.open && cloudPeer.id === peerId) {
           renderBottomRightQrCode();
-        });
+        } else {
+          if (cloudPeer) {
+            try { cloudPeer.destroy(); } catch (_) {}
+          }
 
-        cloudPeer.on("connection", (conn) => {
-          cloudConnections.push(conn);
-          console.log(`[GCMV] 📱 Phone connected via Cloud P2P! (${conn.peer})`);
+          try {
+            cloudPeer = new Peer(peerId);
 
-          conn.on("open", () => {
-            sendCloudStateToPeer(conn);
-          });
+            cloudPeer.on("open", (id) => {
+              console.log(`[GCMV] 🌸 Cloud Remote Host online! Room: ${cloudRoomCode} (Peer: ${id})`);
+              renderBottomRightQrCode();
+            });
 
-          conn.on("data", async (data) => {
-            handleCloudRemoteCommand(data, conn);
-          });
+            cloudPeer.on("connection", (conn) => {
+              cloudConnections.push(conn);
+              console.log(`[GCMV] 📱 Phone connected via Cloud P2P! (${conn.peer})`);
 
-          conn.on("close", () => {
-            cloudConnections = cloudConnections.filter(c => c !== conn);
-          });
+              conn.on("open", () => {
+                sendCloudStateToPeer(conn);
+              });
 
-          conn.on("error", () => {
-            cloudConnections = cloudConnections.filter(c => c !== conn);
-          });
-        });
+              conn.on("data", async (data) => {
+                handleCloudRemoteCommand(data, conn);
+              });
 
-        cloudPeer.on("error", (err) => {
-          console.warn("[GCMV] Cloud Remote Peer error:", err);
-        });
+              conn.on("close", () => {
+                cloudConnections = cloudConnections.filter(c => c !== conn);
+              });
+
+              conn.on("error", () => {
+                cloudConnections = cloudConnections.filter(c => c !== conn);
+              });
+            });
+
+            cloudPeer.on("error", (err) => {
+              console.warn("[GCMV] Cloud Remote Peer error:", err);
+            });
+          } catch (peerErr) {
+            console.warn("[GCMV] PeerJS initialization error:", peerErr);
+          }
+        }
       }
     } catch (e) {
       console.warn("[GCMV] Error initializing Cloud Remote Host:", e);
@@ -4432,6 +4728,7 @@
     await loadWhitelist();
     setupVolumeHotkeys();
     setupManualMuteDetection();
+    setupSearchInterception();
     applyFeatures();
     setupFullscreenListener();
     startRemoteControlPolling();
@@ -4582,100 +4879,123 @@
     } catch (e) {}
   }
 
+  const FULLSCREEN_BUTTON_SELECTOR = [
+    ".fullscreen-icon",
+    "button.fullscreen-icon",
+    "button[aria-label='Full screen']",
+    "button[aria-label='fullscreen']",
+    ".ytp-fullscreen-button",
+    "button[data-title-no-tooltip='Full screen']",
+    ".icon-button.player-control-fullscreen",
+    "[data-button-id='fullscreen']",
+    "ytm-fullscreen-button button",
+    ".player-controls-content button.fullscreen"
+  ].join(", ");
+
+  function tryEnterPlayerFullscreen() {
+    if (isPlayerMediaFullscreen()) return true;
+    const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    if (video && typeof video.webkitEnterFullscreen === "function" && !video.webkitDisplayingFullscreen) {
+      try {
+        video.webkitEnterFullscreen();
+        return true;
+      } catch (_) {}
+    }
+    const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+    if (player && typeof player.toggleFullscreen === "function") {
+      try {
+        player.toggleFullscreen();
+        return true;
+      } catch (_) {}
+    }
+    const fsBtn = document.querySelector(FULLSCREEN_BUTTON_SELECTOR);
+    if (fsBtn && typeof fsBtn.click === "function") {
+      try {
+        fsBtn.click();
+        return true;
+      } catch (_) {}
+    }
+    if (video && typeof video.requestFullscreen === "function") {
+      video.requestFullscreen().catch(() => {});
+      return true;
+    }
+    return false;
+  }
+
+  let fullscreenRestoreToken = 0;
+
   function checkAndRestoreFullscreen() {
     try {
       if (sessionStorage.getItem("gcmv_restore_fullscreen") !== "true") return;
 
+      const token = ++fullscreenRestoreToken;
       let attempts = 0;
+      // Remote "next" often exits fullscreen a moment after the command. Seeing
+      // fullscreen at the start is the old player, not a successful restore.
+      let sawExit = !isPlayerMediaFullscreen();
       let tappedVideo = false;
 
       const interval = setInterval(() => {
+        if (token !== fullscreenRestoreToken) {
+          clearInterval(interval);
+          return;
+        }
         attempts++;
-        if (isPlayerMediaFullscreen()) {
+        const fullNow = isPlayerMediaFullscreen();
+        if (!fullNow) sawExit = true;
+        if (fullNow && sawExit) {
           sessionStorage.removeItem("gcmv_restore_fullscreen");
           clearInterval(interval);
           return;
         }
 
-        const fsBtn = document.querySelector(
-          ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, button[data-title-no-tooltip='Full screen'], .icon-button.player-control-fullscreen, [data-button-id='fullscreen']"
-        );
-        const video = document.querySelector("video");
-
-        if (fsBtn) {
-          const rect = fsBtn.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            if (window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
+        if (!fullNow) {
+          tryEnterPlayerFullscreen();
+          const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
+          const fsBtn = document.querySelector(FULLSCREEN_BUTTON_SELECTOR);
+          const target = (fsBtn && fsBtn.getBoundingClientRect().width > 0) ? fsBtn : video;
+          if (!tappedVideo && target && window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
+            const rect = target.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              tappedVideo = true;
               window.AndroidBridge.simulateTap(rect.left + rect.width / 2, rect.top + rect.height / 2);
-            }
-            if (typeof fsBtn.click === "function") {
-              fsBtn.click();
-            }
-          } else {
-            // Button exists but zero dimensions (hidden controls). Tap video to wake controls
-            if (!tappedVideo && video) {
-              tappedVideo = true;
-              const vRect = video.getBoundingClientRect();
-              if (vRect.width > 0 && vRect.height > 0 && window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
-                window.AndroidBridge.simulateTap(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
-              }
-            }
-          }
-        } else if (video) {
-          const vRect = video.getBoundingClientRect();
-          if (vRect.width > 0 && vRect.height > 0) {
-            if (!tappedVideo && window.AndroidBridge && typeof window.AndroidBridge.simulateTap === "function") {
-              tappedVideo = true;
-              window.AndroidBridge.simulateTap(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
-            }
-            if (typeof video.requestFullscreen === "function") {
-              video.requestFullscreen().catch(() => {});
             }
           }
         }
 
-        if (attempts > 35) {
+        if (attempts > 40) {
           clearInterval(interval);
           sessionStorage.removeItem("gcmv_restore_fullscreen");
         }
       }, 300);
 
-      // One-time fallback on user touch/pointer or desktop mouse/keyboard interaction
       const onUserTouch = (evt) => {
-        if (sessionStorage.getItem("gcmv_restore_fullscreen") === "true") {
-          sessionStorage.removeItem("gcmv_restore_fullscreen");
-          const btn = document.querySelector(
-            ".fullscreen-icon, button.fullscreen-icon, button[aria-label='Full screen'], button[aria-label='fullscreen'], .ytp-fullscreen-button, .icon-button.player-control-fullscreen"
-          );
-          const vid = document.querySelector("video");
-          const target = evt && evt.target;
-          const isPlayerTarget = target && (target.closest("#movie_player, .html5-video-player, video") || target.tagName === "VIDEO");
-
-          if (btn && typeof btn.click === "function") {
-            btn.click();
-          } else if (vid && typeof vid.requestFullscreen === "function") {
-            vid.requestFullscreen().catch(() => {});
-          }
-
-          // If the user tapped/clicked on the video itself to recover fullscreen, YouTube's default click handler
-          // pauses the video. Automatically unpause so there is no accidental pause glitch!
-          if (isPlayerTarget) {
-            setTimeout(() => {
-              if (vid && vid.paused && !window.__gachaUserManuallyPaused) {
-                vid.play().catch(() => {});
-              }
-              const p = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
-              if (p && typeof p.playVideo === "function") {
-                try { p.playVideo(); } catch (_) {}
-              }
-            }, 80);
-          }
+        if (token !== fullscreenRestoreToken) return;
+        if (sessionStorage.getItem("gcmv_restore_fullscreen") !== "true") return;
+        tryEnterPlayerFullscreen();
+        const vid = document.querySelector("video");
+        const target = evt && evt.target;
+        const isPlayerTarget = target && (target.closest && target.closest("#movie_player, .html5-video-player, video") || target.tagName === "VIDEO");
+        if (isPlayerTarget) {
+          setTimeout(() => {
+            if (vid && vid.paused && !window.__gachaUserManuallyPaused) {
+              vid.play().catch(() => {});
+            }
+            const p = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+            if (p && typeof p.playVideo === "function") {
+              try { p.playVideo(); } catch (_) {}
+            }
+          }, 80);
         }
       };
-      ["pointerdown", "touchstart", "click", "mousedown", "keydown"].forEach((evt) => {
-        window.addEventListener(evt, onUserTouch, { once: true, capture: true });
-        document.addEventListener(evt, onUserTouch, { once: true, capture: true });
+      ["pointerdown", "touchstart", "click", "mousedown"].forEach((evt) => {
+        window.addEventListener(evt, onUserTouch, { capture: true });
       });
+      setTimeout(() => {
+        ["pointerdown", "touchstart", "click", "mousedown"].forEach((evt) => {
+          window.removeEventListener(evt, onUserTouch, { capture: true });
+        });
+      }, 12000);
     } catch (e) {}
   }
 
@@ -4683,11 +5003,19 @@
 
   function navigateToVideo(videoId, title, stripMix = false, playlistId = "", playlistIndex = "") {
     if (!videoId) return;
+    const alreadyPlaying = document.querySelector("video.html5-main-video") || document.querySelector("video");
+    if (
+      getCurrentVideoId() === videoId &&
+      alreadyPlaying &&
+      !alreadyPlaying.ended &&
+      isFinite(alreadyPlaying.currentTime) &&
+      alreadyPlaying.currentTime > 1.5
+    ) {
+      return;
+    }
     recordCurrentTrackSession(videoId, title);
     const wasFullscreen = isPlayerMediaFullscreen();
-    if (!wasFullscreen) {
-      saveFullscreenStateBeforeNavigate();
-    }
+    saveFullscreenStateBeforeNavigate();
     recordRecentPlayedVideoId(videoId);
     window.__gachaUserManuallyPaused = false;
     lastNavigatedTime = Date.now();
@@ -4701,9 +5029,25 @@
     }
     const fullCleanUrl = "https://" + (window.location.host || "m.youtube.com") + cleanPath;
 
-    // 1. Try desktop YouTube movie_player SPA navigation (preserves fullscreen seamlessly without reload)
+    // 1. AndroidBridge native navigation: always top priority on Android APK!
+    if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
+      saveFullscreenStateBeforeNavigate();
+      window.AndroidBridge.loadUrl("https://m.youtube.com" + cleanPath);
+      if (title) showToast("▶️ Playing: " + title + " 🌸");
+      return;
+    }
+
+    // 2. Desktop YouTube movie_player SPA navigation
     const moviePlayer = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
     if (moviePlayer) {
+      let mainWorldSuccess = false;
+      const respHandler = (e) => {
+        if (e && e.detail && e.detail.action === "loadVideoById" && e.detail.videoId === videoId) {
+          mainWorldSuccess = true;
+        }
+      };
+      window.addEventListener("GCMV_MAIN_WORLD_RESP", respHandler, { once: true });
+
       dispatchMainWorldPlayerAction("loadVideoById", videoId);
       try {
         if (typeof moviePlayer.loadVideoById === "function") {
@@ -4714,30 +5058,40 @@
         }
       } catch (_) {}
       try {
-        window.history.pushState(null, "", cleanPath);
-        // Do NOT dispatch yt-navigate-finish when in fullscreen: it causes ytd-watch-flexy to re-render and drop fullscreen!
-        if (!wasFullscreen) {
-          window.dispatchEvent(new CustomEvent("yt-navigate-finish"));
-        }
-      } catch (e) {}
+        window.dispatchEvent(new CustomEvent("yt-navigate", {
+          bubbles: true,
+          composed: true,
+          detail: {
+            endpoint: {
+              watchEndpoint: {
+                videoId: videoId
+              }
+            }
+          }
+        }));
+        const navLink = document.createElement("a");
+        navLink.href = cleanPath;
+        navLink.className = "yt-simple-endpoint";
+        navLink.style.display = "none";
+        (document.body || document.documentElement).appendChild(navLink);
+        navLink.click();
+        navLink.remove();
+      } catch (_) {}
+
       if (title) showToast("▶️ Playing: " + title + " 🌸");
+      if (wasFullscreen) checkAndRestoreFullscreen();
       setTimeout(() => {
         attemptAutoplayRecovery("navigateToVideo");
       }, 350);
 
-      // Verify that the video changed after 2500ms; if stuck and NOT in fullscreen, fallback to hard navigation
+      // Verify whether the video changed; if still on old video after 450ms, fallback to hard navigation
       setTimeout(() => {
-        if (getCurrentVideoId() !== videoId && !isPlayerMediaFullscreen() && !window.AndroidBridge) {
+        window.removeEventListener("GCMV_MAIN_WORLD_RESP", respHandler);
+        if (getCurrentVideoId() !== videoId && !mainWorldSuccess) {
+          saveFullscreenStateBeforeNavigate();
           window.location.href = fullCleanUrl;
         }
-      }, 2500);
-      return;
-    }
-
-    // 2. AndroidBridge native navigation
-    if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
-      saveFullscreenStateBeforeNavigate();
-      window.AndroidBridge.loadUrl("https://m.youtube.com" + cleanPath);
+      }, 450);
       return;
     }
 
@@ -5328,38 +5682,64 @@
     { label: "🎲 Random Gacha MV", query: "Best GCMV songs compilation" }
   ];
 
+  function findChipAnchor() {
+    const mobileContent = document.querySelector(
+      "ytm-search ytm-section-list-renderer, ytm-search, ytm-browse ytm-rich-grid-renderer, ytm-browse ytm-section-list-renderer, ytm-browse"
+    );
+    if (mobileContent) return { node: mobileContent, where: "start" };
+
+    const desktopContent = document.querySelector(
+      "ytd-search #primary, ytd-two-column-search-results-renderer #primary, ytd-browse #primary, #primary"
+    );
+    if (desktopContent) return { node: desktopContent, where: "start" };
+
+    const chipBar = document.querySelector("ytm-feed-filter-chip-bar-renderer, ytd-feed-filter-chip-bar-renderer, ytm-chip-cloud-renderer");
+    if (chipBar && chipBar.parentNode) return { node: chipBar, where: "before" };
+
+    const masthead = document.querySelector("#masthead-container, ytd-masthead");
+    if (masthead && masthead.parentNode) return { node: masthead, where: "after" };
+    return null;
+  }
+
+  function placeChipHost(host, anchor) {
+    if (!host || !anchor || !anchor.node) return;
+    if (anchor.where === "start") {
+      if (host.parentElement !== anchor.node || anchor.node.firstElementChild !== host) {
+        anchor.node.insertBefore(host, anchor.node.firstChild);
+      }
+      return;
+    }
+    if (anchor.where === "before") {
+      if (host.nextElementSibling !== anchor.node) {
+        anchor.node.insertAdjacentElement("beforebegin", host);
+      }
+      return;
+    }
+    if (host.previousElementSibling !== anchor.node) {
+      anchor.node.insertAdjacentElement("afterend", host);
+    }
+  }
+
   function getChipsMountTarget() {
     const path = window.location.pathname;
-    if (path.startsWith("/watch")) {
-      // Do not inject search chips in sidebar on watch pages
+    if (path.startsWith("/watch") || path.startsWith("/shorts")) {
       return null;
     }
 
-    const existingHost = document.getElementById("gacha-chips-host");
-    const mobileTopbar = document.querySelector("ytm-mobile-topbar-renderer");
-    const chipBar = document.querySelector("ytm-feed-filter-chip-bar-renderer, ytd-feed-filter-chip-bar-renderer, ytm-chip-cloud-renderer");
-    const masthead = document.querySelector("#masthead-container, ytd-masthead");
-
-    if (existingHost && document.contains(existingHost)) {
-      if (mobileTopbar && existingHost.previousElementSibling !== mobileTopbar && mobileTopbar.parentNode) {
-        mobileTopbar.insertAdjacentElement("afterend", existingHost);
-      }
-      return existingHost;
+    let host = document.getElementById("gacha-chips-host");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "gacha-chips-host";
     }
 
-    const host = document.createElement("div");
-    host.id = "gacha-chips-host";
-
-    if (mobileTopbar && mobileTopbar.parentNode) {
-      mobileTopbar.insertAdjacentElement("afterend", host);
-    } else if (chipBar && chipBar.parentNode) {
-      chipBar.insertAdjacentElement("beforebegin", host);
-    } else if (masthead && masthead.parentNode) {
-      masthead.insertAdjacentElement("afterend", host);
-    } else {
-      const parent = document.body || document.documentElement;
-      parent.insertBefore(host, parent.firstChild);
+    const anchor = findChipAnchor();
+    if (anchor) {
+      placeChipHost(host, anchor);
+      return host;
     }
+
+    const parent = document.body || document.documentElement;
+    if (host.parentElement !== parent) parent.insertBefore(host, parent.firstChild);
     return host;
   }
 
@@ -5369,7 +5749,7 @@
       return;
     }
 
-    if (window.location.pathname.startsWith("/watch")) {
+    if (window.location.pathname.startsWith("/watch") || window.location.pathname.startsWith("/shorts")) {
       removeSearchChips();
       return;
     }
@@ -5417,6 +5797,7 @@
 
   function executeYoutubeSearch(query) {
     if (!query) return;
+    const finalQuery = formatGachaSearchQuery(query);
 
     // 1. Try filling search input
     const input =
@@ -5427,7 +5808,7 @@
       document.querySelector("ytm-searchbox input");
 
     if (input) {
-      input.value = query;
+      input.value = finalQuery;
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -5438,12 +5819,8 @@
     }
 
     // 2. Direct SPA / Browser Navigation
-    const searchUrl = `/results?search_query=${encodeURIComponent(query)}`;
-    if (window.AndroidBridge && typeof window.AndroidBridge.loadUrl === "function") {
-      window.AndroidBridge.loadUrl(`https://m.youtube.com${searchUrl}`);
-    } else {
-      window.location.href = searchUrl;
-    }
+    const searchUrl = `/results?search_query=${encodeURIComponent(finalQuery)}`;
+    window.location.href = searchUrl;
   }
 
   // ==========================================================
@@ -6697,10 +7074,7 @@
     function doPanelSearch() {
       const q = searchInput.value.trim();
       if (!q) return;
-      let finalQ = q;
-      if (!isGachaVideo(q)) {
-        finalQ = `${q} GCMV GLMV`;
-      }
+      const finalQ = formatGachaSearchQuery(q);
       executeYoutubeSearch(finalQ);
     }
 
@@ -7353,6 +7727,9 @@
       captureCurrentMixState();
       const item = cloudRemoteQueue.shift();
       extStorage.set({ cloudRemoteQueue }).catch(() => {});
+      if (window.AndroidBridge && typeof window.AndroidBridge.popNextQueuedVideo === "function") {
+        try { window.AndroidBridge.popNextQueuedVideo(); } catch (_) {}
+      }
       broadcastCloudState();
       if (typeof refreshInpageQueue === "function") refreshInpageQueue();
       showToast("📱 Remote Queue: Playing next ➔ " + (item.title || item.videoId) + " 🌸");
@@ -7588,7 +7965,7 @@
     evaluateRecommendations();
   }
 
-  window.__gachaForceSkip = () => executeSkipNextTrack("user_skip");
+  window.__gachaForceSkip = (reason) => executeSkipNextTrack(reason || "remote_skip");
   window.__gachaSkipVideo = () => executeSkipNextTrack("user_skip");
   window.__gachaPlayNext = () => executeSkipNextTrack("user_skip");
 
@@ -7713,6 +8090,12 @@
           activeSegmentVideoId = "";
           changed = true;
         }
+        if (changes.cloudRemoteQueue !== undefined) {
+          if (Array.isArray(changes.cloudRemoteQueue.newValue)) {
+            cloudRemoteQueue = changes.cloudRemoteQueue.newValue;
+            if (typeof refreshInpageQueue === "function") refreshInpageQueue();
+          }
+        }
         if (changes.retimedSegments !== undefined) {
           retimedSegments = changes.retimedSegments.newValue || {};
           activeSegmentVideoId = "";
@@ -7797,7 +8180,20 @@
 
   // Handle YouTube Desktop & Mobile SPA Navigation
   let lastNavigationHref = window.location.href;
+  let lastHandledWatchVideoId = "";
   function handlePageNavigation() {
+    const watch = isWatchPage();
+    const navVideoId = watch ? getCurrentVideoId() : "";
+    // load, yt-page-data-updated, and yt-visibility-refresh also fire once the
+    // watch page has finished hydrating. Running this again reloads the video
+    // that is already playing.
+    if (watch && navVideoId && navVideoId === lastHandledWatchVideoId) {
+      lastNavigationHref = window.location.href;
+      return;
+    }
+    if (watch && !navVideoId) return;
+    lastHandledWatchVideoId = navVideoId;
+
     autoSkipCheckGeneration++;
     if (autoSkipPollTimer) {
       clearTimeout(autoSkipPollTimer);
@@ -7842,6 +8238,7 @@
     }
     ensureAudioContextResumed();
 
+    checkAndEnforceSearchResultsGuard();
     applyFeatures();
     handleFullscreenState();
     lastNavigationHref = window.location.href;
@@ -7850,6 +8247,9 @@
     [300, 800, 1500, 2500, 4000].forEach((delay) => {
       setTimeout(() => {
         if (settings.enabled) {
+          if (!isWatchPage()) {
+            checkAndEnforceSearchResultsGuard();
+          }
           applyFeatures();
           ensureAudioContextResumed();
           if (isWatchPage()) {
@@ -7909,7 +8309,7 @@
       if (settings.autoplayGuard && !videoListenerAttached) {
         setupAutoplayGuard();
       }
-      if (settings.showSearchChips && !isWatch && !document.getElementById("gacha-search-chips-bar")) {
+      if (settings.showSearchChips && !isWatch) {
         injectSearchChips();
       }
       if (settings.showJukebox && !document.getElementById("gacha-floating-widget")) {
@@ -7952,7 +8352,7 @@
       if (settings.showJukebox && !document.getElementById("gacha-floating-widget")) {
         injectFloatingJukebox();
       }
-      if (settings.showSearchChips && !isWatch && !document.getElementById("gacha-search-chips-bar")) {
+      if (settings.showSearchChips && !isWatch) {
         injectSearchChips();
       }
       if (settings.blockAds !== false) {
@@ -7978,5 +8378,6 @@
     }
   }
 
+  setupSearchInterception();
   startInit();
 })();

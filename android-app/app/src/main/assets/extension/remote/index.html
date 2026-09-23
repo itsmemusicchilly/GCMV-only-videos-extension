@@ -199,14 +199,23 @@
       return `${m}:${rem < 10 ? '0' : ''}${rem}`;
     }
 
-    function onSuccessfulConnection(cleanCode) {
+    const MQTT_BROKERS = [
+      { name: "EMQX", host: "broker.emqx.io", port: 8084, path: "/mqtt", ssl: true },
+      { name: "HiveMQ", host: "broker.hivemq.com", port: 8884, path: "/mqtt", ssl: true }
+    ];
+
+    let currentBrokerIndex = 0;
+    let activeBrokerName = "";
+
+    function onSuccessfulConnection(cleanCode, brokerName) {
       isConnected = true;
-      setConnectionBadge("connected", `ROOM ${cleanCode}`);
+      const via = brokerName ? ` (${brokerName})` : "";
+      setConnectionBadge("connected", `ROOM ${cleanCode}${via}`);
       document.getElementById("mainControlsView").classList.remove("hidden");
       document.getElementById("activeRoomTag").textContent = `Room: ${cleanCode}`;
       document.getElementById("inputRoomCode").value = cleanCode;
       const hintEl = document.getElementById("roomHint");
-      if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}!</span>`;
+      if (hintEl) hintEl.innerHTML = `<span style="color:#00ffaa; font-weight:700;">● Connected to Room ${cleanCode}${via}!</span>`;
       showToast(`🟢 Connected to Room ${cleanCode}!`);
       if (currentPin) {
         sendCommand({ action: "auth_pin", pin: currentPin });
@@ -215,8 +224,13 @@
 
     function sendCommand(cmd) {
       let sent = false;
-      if (cmd && currentPin) {
-        cmd.pin = currentPin;
+      if (cmd) {
+        if (!cmd.cmdId) {
+          cmd.cmdId = "c_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+        }
+        if (currentPin) {
+          cmd.pin = currentPin;
+        }
       }
 
       // 1. Send via MQTT WebSocket
@@ -246,7 +260,7 @@
       }
     }
 
-    function connectMqtt(cleanCode) {
+    function connectMqtt(cleanCode, brokerIdx = 0) {
       const PahoLib = typeof Paho !== "undefined" ? Paho : (typeof window !== "undefined" ? window.Paho : null);
       if (!PahoLib || !PahoLib.MQTT || !PahoLib.MQTT.Client) {
         console.warn("[GCMV Remote] Paho MQTT library not available");
@@ -258,12 +272,14 @@
         mqttClient = null;
       }
 
+      currentBrokerIndex = brokerIdx;
+      const broker = MQTT_BROKERS[currentBrokerIndex] || MQTT_BROKERS[0];
       const clientId = "gcmv-rm-" + Math.random().toString(36).substring(2, 10);
       const stateTopic = `gcmv/room/${cleanCode}/state`;
-      const client = new PahoLib.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
+      const client = new PahoLib.MQTT.Client(broker.host, broker.port, broker.path, clientId);
 
       client.onConnectionLost = (resp) => {
-        console.warn("[GCMV Remote] MQTT connection lost:", resp ? resp.errorMessage : "");
+        console.warn(`[GCMV Remote] MQTT (${broker.name}) connection lost:`, resp ? resp.errorMessage : "");
         if (!peerConn || !peerConn.open) {
           isConnected = false;
           setConnectionBadge("disconnected", "DISCONNECTED");
@@ -281,26 +297,31 @@
       };
 
       client.connect({
-        useSSL: true,
-        timeout: 8,
+        useSSL: broker.ssl,
+        timeout: 4,
         keepAliveInterval: 30,
         cleanSession: true,
         onSuccess: () => {
-          console.log(`[GCMV Remote] 🌸 MQTT connected to room ${cleanCode}`);
+          console.log(`[GCMV Remote] 🌸 MQTT connected to room ${cleanCode} via ${broker.name}`);
           mqttClient = client;
+          activeBrokerName = broker.name;
           client.subscribe(stateTopic, {
             onSuccess: () => {
-              onSuccessfulConnection(cleanCode);
+              onSuccessfulConnection(cleanCode, broker.name);
               sendCommand({ action: "get_state" });
             },
             onFailure: (err) => {
-              console.warn("[GCMV Remote] Failed to subscribe to stateTopic:", err);
+              console.warn(`[GCMV Remote] Failed to subscribe to stateTopic on ${broker.name}:`, err);
             }
           });
         },
         onFailure: (err) => {
-          console.warn("[GCMV Remote] MQTT connection failed:", err ? err.errorMessage : "");
-          if (!isConnected) {
+          console.warn(`[GCMV Remote] MQTT connection to ${broker.name} failed:`, err ? err.errorMessage : "");
+          // Immediate failover to fallback broker
+          if (currentBrokerIndex + 1 < MQTT_BROKERS.length) {
+            console.log(`[GCMV Remote] Trying fallback broker: ${MQTT_BROKERS[currentBrokerIndex + 1].name}`);
+            connectMqtt(cleanCode, currentBrokerIndex + 1);
+          } else if (!isConnected) {
             scheduleReconnect();
           }
         }
@@ -322,7 +343,7 @@
           peerConn = peer.connect(targetPeerId, { reliable: true });
 
           peerConn.on("open", () => {
-            onSuccessfulConnection(cleanCode);
+            onSuccessfulConnection(cleanCode, "P2P");
             peerConn.send({ action: "get_state" });
           });
 
@@ -360,8 +381,8 @@
       const hintEl = document.getElementById("roomHint");
       if (hintEl) hintEl.innerHTML = `Connecting to Room <strong>${cleanCode}</strong>...`;
 
-      // 1. Connect via fast & rock-solid MQTT WebSocket relay
-      connectMqtt(cleanCode);
+      // 1. Connect via fast & rock-solid MQTT WebSocket relay (EMQX primary ~0.2s, HiveMQ fallback)
+      connectMqtt(cleanCode, 0);
 
       // 2. Also connect via WebRTC PeerJS in parallel
       connectPeerJs(cleanCode);
@@ -373,7 +394,7 @@
         if (activeRoomCode && !isConnected) {
           connectToRoom(activeRoomCode);
         }
-      }, 4000);
+      }, 3000);
     }
 
     function handleIncomingData(data) {

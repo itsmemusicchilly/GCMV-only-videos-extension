@@ -61,7 +61,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -96,6 +99,9 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private BottomSheetDialog settingsDialog = null;
     private RemoteServerManager remoteServerManager = null;
+    private CloudMqttHost cloudMqttHost = null;
+    private String cloudLoopMode = "off";
+    private final ExecutorService cloudWork = Executors.newSingleThreadExecutor();
 
     public static String createRandomRoomCode() {
         String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -126,6 +132,7 @@ public class MainActivity extends AppCompatActivity {
         }
         getSharedPreferences("gacha_prefs", MODE_PRIVATE).edit().putString("cloudRoomCode", sanitized).apply();
         syncSettingToWebView("cloudRoomCode", sanitized);
+        ensureCloudHost();
     }
 
     public String getCloudRemoteUrl() {
@@ -153,6 +160,7 @@ public class MainActivity extends AppCompatActivity {
         setupTopBarAndFab();
         setupWebView();
         setupRemoteServer();
+        ensureCloudHost();
         setupBackNavigation();
 
         if (savedInstanceState != null) {
@@ -189,13 +197,12 @@ public class MainActivity extends AppCompatActivity {
                         webView.evaluateJavascript("(function(){ if(typeof window.__gachaPlayPrevious==='function'){ window.__gachaPlayPrevious(); } })()", null);
                         break;
                     case "next":
-                        if (customView != null) {
-                            wasFullscreenBeforeNavigate = true;
-                        }
+                    case "skip":
                         webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } else if(typeof window.__gachaSkipVideo==='function'){ window.__gachaSkipVideo('remote_skip'); } else { var btn=document.querySelector('.ytp-next-button, [data-testid=\"next-button\"], .player-controls-next, .icon-button.player-control-next, ytm-next-button'); if(btn) btn.click(); } })()", null);
                         break;
                     case "set_loop":
                         if (value != null) {
+                            cloudLoopMode = value.toString();
                             webView.evaluateJavascript("(function(){ if(typeof window.__gachaSetLoopMode==='function'){ window.__gachaSetLoopMode('" + value.toString() + "'); } })()", null);
                         }
                         break;
@@ -212,8 +219,7 @@ public class MainActivity extends AppCompatActivity {
         android.content.SharedPreferences spInit = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
         getOrGenerateRoomCode();
         boolean remoteEnabled = spInit.getBoolean("remoteServerEnabled", true);
-        boolean localEnabled = spInit.getBoolean("localServerEnabled", false);
-        if (remoteEnabled && localEnabled) {
+        if (remoteEnabled) {
             remoteServerManager.start(8080);
         }
     }
@@ -729,13 +735,9 @@ public class MainActivity extends AppCompatActivity {
         autoSaveSetting(swRemote, "remoteServerEnabled", isChecked -> {
             if (layoutRemoteDetails != null) layoutRemoteDetails.setVisibility(isChecked ? View.VISIBLE : View.GONE);
             if (isChecked) {
-                if ("local".equals(currentMode[0])) {
-                    if (remoteServerManager != null && !remoteServerManager.isRunning()) {
-                        remoteServerManager.start(8080);
-                        mainHandler.postDelayed(refreshRemoteUi::run, 400);
-                    } else {
-                        refreshRemoteUi.run();
-                    }
+                if (remoteServerManager != null && !remoteServerManager.isRunning()) {
+                    remoteServerManager.start(8080);
+                    mainHandler.postDelayed(refreshRemoteUi::run, 400);
                 } else {
                     refreshRemoteUi.run();
                 }
@@ -1171,7 +1173,8 @@ public class MainActivity extends AppCompatActivity {
         if (btnRadio != null) {
             btnRadio.setOnClickListener(v -> {
                 dialog.dismiss();
-                if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=Trending+GCMV+GLMV");
+                String target = formatGachaSearchQuery(MainActivity.this, "Trending");
+                if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(target));
             });
         }
 
@@ -1180,7 +1183,8 @@ public class MainActivity extends AppCompatActivity {
                 String q = etSearch.getText().toString().trim();
                 if (!q.isEmpty()) {
                     dialog.dismiss();
-                    if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(q + " GCMV GLMV"));
+                    String finalQ = formatGachaSearchQuery(MainActivity.this, q);
+                    if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(finalQ));
                 }
             }
         };
@@ -1203,12 +1207,46 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
+    public static final String GACHA_SEARCH_TAG_BLOCK = "\"GLMV|GL2MV|GCMV|MEP\"";
+
+    public static String formatGachaSearchQuery(Context context, String rawQuery) {
+        if (rawQuery == null) return "";
+        String q = rawQuery.trim();
+        if (q.isEmpty()) return "";
+
+        if (context != null) {
+            android.content.SharedPreferences sp = context.getSharedPreferences("gacha_prefs", Context.MODE_PRIVATE);
+            boolean enabled = sp.getBoolean("enabled", true);
+            boolean guard = sp.getBoolean("autoplayGuard", true);
+            if (!enabled || !guard) {
+                return q;
+            }
+        }
+
+        if (q.contains("GLMV|GL2MV|GCMV|MEP") || q.contains("GLMV|GCMV|GL2MV|MEP")) {
+            return q;
+        }
+
+        String unquoted = q.replaceAll("^[\"']+|[\"']+$", "").trim();
+        String coreTitle = unquoted.replaceAll("(?i)\\b(glmv|gcmv|gl2mv|mep|gacha(\\s*(life(\\s*2)?|club|mv|video|animation))?)\\b", "")
+                                   .replaceAll("\\s+", " ")
+                                   .trim();
+        coreTitle = coreTitle.replaceAll("^[\"']+|[\"']+$", "").trim();
+
+        if (coreTitle.isEmpty()) {
+            return GACHA_SEARCH_TAG_BLOCK;
+        }
+
+        return "\"" + coreTitle + "\" " + GACHA_SEARCH_TAG_BLOCK;
+    }
+
     private void bindCategoryButton(View root, int btnId, String query, BottomSheetDialog dialog) {
         View b = root.findViewById(btnId);
         if (b != null) {
             b.setOnClickListener(v -> {
                 dialog.dismiss();
-                if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(query));
+                String target = formatGachaSearchQuery(MainActivity.this, query);
+                if (webView != null) webView.loadUrl("https://m.youtube.com/results?search_query=" + Uri.encode(target));
             });
         }
     }
@@ -1350,11 +1388,60 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.setWebViewClient(new WebViewClient() {
+            private boolean handleUrlGuard(WebView view, Uri uri) {
+                if (uri == null) return false;
+                String url = uri.toString();
+                if (url.contains("/results") && (url.contains("search_query=") || url.contains("q=") || url.contains("search="))) {
+                    android.content.SharedPreferences sp = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
+                    if (sp.getBoolean("enabled", true) && sp.getBoolean("autoplayGuard", true)) {
+                        String query = uri.getQueryParameter("search_query");
+                        if (query == null) query = uri.getQueryParameter("q");
+                        if (query == null) query = uri.getQueryParameter("search");
+                        if (query != null && !query.trim().isEmpty() &&
+                            !query.contains("GLMV|GL2MV|GCMV|MEP") && !query.contains("GLMV|GCMV|GL2MV|MEP")) {
+                            String formatted = formatGachaSearchQuery(MainActivity.this, query);
+                            if (!formatted.equals(query)) {
+                                Uri.Builder builder = uri.buildUpon().clearQuery();
+                                for (String name : uri.getQueryParameterNames()) {
+                                    if ("search_query".equals(name) || "q".equals(name) || "search".equals(name)) continue;
+                                    for (String existing : uri.getQueryParameters(name)) {
+                                        builder.appendQueryParameter(name, existing);
+                                    }
+                                }
+                                builder.appendQueryParameter("search_query", formatted);
+                                view.loadUrl(builder.build().toString());
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                if (url.contains("youtube.com") || url.contains("youtu.be") || url.contains("sponsor.ajay.app")) {
-                    return false;
+                if (request != null && request.getUrl() != null) {
+                    if (handleUrlGuard(view, request.getUrl())) {
+                        return true;
+                    }
+                    String url = request.getUrl().toString();
+                    if (url.contains("youtube.com") || url.contains("youtu.be") || url.contains("sponsor.ajay.app")) {
+                        return false;
+                    }
+                }
+                return false;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url != null) {
+                    Uri uri = Uri.parse(url);
+                    if (handleUrlGuard(view, uri)) {
+                        return true;
+                    }
+                    if (url.contains("youtube.com") || url.contains("youtu.be") || url.contains("sponsor.ajay.app")) {
+                        return false;
+                    }
                 }
                 return false;
             }
@@ -1621,6 +1708,10 @@ public class MainActivity extends AppCompatActivity {
         if (remoteServerManager != null) {
             remoteServerManager.stop();
         }
+        if (cloudMqttHost != null) {
+            cloudMqttHost.stop();
+        }
+        cloudWork.shutdownNow();
         if (webView != null) {
             webView.destroy();
         }
@@ -1632,6 +1723,173 @@ public class MainActivity extends AppCompatActivity {
         super.onSaveInstanceState(outState);
         if (webView != null) {
             webView.saveState(outState);
+        }
+    }
+
+    private void ensureCloudHost() {
+        if (cloudMqttHost == null) {
+            cloudMqttHost = new CloudMqttHost(cmd -> mainHandler.post(() -> handleCloudCommand(cmd)));
+        }
+        cloudMqttHost.start(getOrGenerateRoomCode());
+        publishNativeState();
+    }
+
+    private boolean cloudPinAllows(JSONObject cmd) {
+        android.content.SharedPreferences sp = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
+        if (!sp.getBoolean("remotePinEnabled", false)) return true;
+        if ("get_state".equals(cmd.optString("action", ""))) return true;
+        String configured = sp.getString("remotePin", "1234");
+        if (configured == null) configured = "";
+        return configured.trim().equals(cmd.optString("pin", "").trim());
+    }
+
+    private void publishCloudPayload(String json, boolean retain) {
+        if (cloudMqttHost == null || json == null || json.isEmpty()) return;
+        cloudMqttHost.publish(json, retain);
+    }
+
+    private void publishNativeState() {
+        if (remoteServerManager == null) return;
+        android.content.SharedPreferences sp = getSharedPreferences("gacha_prefs", MODE_PRIVATE);
+        JSONObject state = remoteServerManager.buildCloudState(
+                getOrGenerateRoomCode(),
+                cloudLoopMode,
+                sp.getBoolean("remotePinEnabled", false));
+        publishCloudPayload(state.toString(), true);
+    }
+
+    private void publishSearchResults(String query) {
+        if (remoteServerManager == null) return;
+        String raw = remoteServerManager.searchYouTube(query);
+        try {
+            JSONObject msg = new JSONObject();
+            msg.put("type", "SEARCH_RESULTS");
+            msg.put("query", query == null ? "" : query);
+            msg.put("results", new JSONArray(raw));
+            publishCloudPayload(msg.toString(), false);
+        } catch (Exception e) {
+            Log.e(TAG, "Cloud search publish failed", e);
+        }
+    }
+
+    private void applyNativeControl(String action, Object value) {
+        if (webView == null || action == null) return;
+        switch (action) {
+            case "play":
+                webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.play(); })()", null);
+                break;
+            case "pause":
+                webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v) v.pause(); })()", null);
+                break;
+            case "prev":
+                webView.evaluateJavascript("(function(){ if(typeof window.__gachaPlayPrevious==='function'){ window.__gachaPlayPrevious(); } })()", null);
+                break;
+            case "next":
+            case "skip":
+                webView.evaluateJavascript("(function(){ if(typeof window.__gachaForceSkip==='function'){ window.__gachaForceSkip('remote_skip'); } })()", null);
+                break;
+            case "set_loop":
+                if (value != null) {
+                    String mode = value.toString().replace("'", "");
+                    webView.evaluateJavascript("(function(){ if(typeof window.__gachaSetLoopMode==='function'){ window.__gachaSetLoopMode('" + mode + "'); } })()", null);
+                }
+                break;
+            case "volume":
+                if (value instanceof Number) {
+                    int vol = Math.max(0, Math.min(200, ((Number) value).intValue()));
+                    webView.evaluateJavascript("(function(){ var v=document.querySelector('video'); if(v){ v.volume = " + (Math.min(100, vol) / 100.0) + "; } })()", null);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void playCloudVideo(String videoId) {
+        if (webView == null || videoId == null || videoId.isEmpty()) return;
+        if (customView != null) wasFullscreenBeforeNavigate = true;
+        webView.loadUrl("https://m.youtube.com/watch?v=" + videoId);
+    }
+
+    private void handleCloudCommand(JSONObject cmd) {
+        if (cmd == null) return;
+        String action = cmd.optString("action", "");
+        if (!cloudPinAllows(cmd)) {
+            try {
+                publishCloudPayload(new JSONObject().put("type", "PIN_ERROR").put("message", "PIN required or invalid").toString(), false);
+            } catch (Exception ignored) {}
+            return;
+        }
+        if ("auth_pin".equals(action)) {
+            try {
+                publishCloudPayload(new JSONObject().put("type", "PIN_OK").toString(), false);
+            } catch (Exception ignored) {}
+            return;
+        }
+        dispatchCloudCommandToPage(cmd, () -> handleCloudCommandNatively(cmd));
+    }
+
+    private void dispatchCloudCommandToPage(JSONObject cmd, Runnable fallback) {
+        if (webView == null) {
+            fallback.run();
+            return;
+        }
+        String literal = JSONObject.quote(cmd.toString());
+        webView.evaluateJavascript(
+                "(function(){ if (typeof window.__gachaHandleRemoteCommand!=='function') return 'missing';" +
+                        " try { window.__gachaHandleRemoteCommand(" + literal + "); return 'ok'; }" +
+                        " catch (e) { return 'missing'; } })()",
+                result -> {
+                    if (result == null || result.contains("missing")) fallback.run();
+                });
+    }
+
+    private void handleCloudCommandNatively(JSONObject cmd) {
+        String action = cmd.optString("action", "");
+        String videoId = cmd.optString("videoId", cmd.optString("url", "")).trim();
+        String title = cmd.optString("title", "");
+        switch (action) {
+            case "get_state":
+                publishNativeState();
+                break;
+            case "play":
+            case "pause":
+            case "prev":
+            case "next":
+            case "skip":
+            case "volume":
+                applyNativeControl(action, cmd.has("value") ? cmd.opt("value") : null);
+                publishNativeState();
+                break;
+            case "set_loop":
+                cloudLoopMode = cmd.optString("mode", "off");
+                applyNativeControl("set_loop", cloudLoopMode);
+                publishNativeState();
+                break;
+            case "play_now":
+                if (remoteServerManager != null) remoteServerManager.addVideoToQueue(videoId, title, "play_now");
+                else playCloudVideo(videoId);
+                publishNativeState();
+                break;
+            case "play_next":
+            case "add_queue":
+                if (remoteServerManager != null) remoteServerManager.addVideoToQueue(videoId, title, action);
+                publishNativeState();
+                break;
+            case "remove_queue":
+                if (remoteServerManager != null) remoteServerManager.removeQueueItem(cmd.optString("id", ""));
+                publishNativeState();
+                break;
+            case "clear_queue":
+                if (remoteServerManager != null) remoteServerManager.clearQueue();
+                publishNativeState();
+                break;
+            case "search":
+                final String query = cmd.optString("query", "");
+                cloudWork.execute(() -> publishSearchResults(query));
+                break;
+            default:
+                break;
         }
     }
 
@@ -1669,6 +1927,9 @@ public class MainActivity extends AppCompatActivity {
                     settingsDialog.dismiss();
                 }
                 if (webView != null && url != null && !url.isEmpty()) {
+                    if (customView != null) {
+                        wasFullscreenBeforeNavigate = true;
+                    }
                     webView.loadUrl(url);
                 }
             });
@@ -1823,6 +2084,21 @@ public class MainActivity extends AppCompatActivity {
             if (remoteServerManager != null) {
                 remoteServerManager.addVideoToQueue(videoId, title, action);
             }
+        }
+
+        @JavascriptInterface
+        public void publishCloudMessage(String json) {
+            if (json == null || json.isEmpty()) return;
+            boolean retain = false;
+            try {
+                retain = "STATE".equals(new JSONObject(json).optString("type"));
+            } catch (Exception ignored) {}
+            publishCloudPayload(json, retain);
+        }
+
+        @JavascriptInterface
+        public void searchYouTubeNative(String query) {
+            cloudWork.execute(() -> publishSearchResults(query));
         }
 
         @JavascriptInterface
