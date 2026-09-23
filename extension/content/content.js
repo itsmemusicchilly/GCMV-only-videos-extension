@@ -6425,17 +6425,43 @@
       }
 
       inpageQueueCount.textContent = items.length;
+      inpageQueueItems.replaceChildren();
       if (items.length === 0) {
-        inpageQueueItems.innerHTML = '<div style="color:#a09bb8; font-size:11px; font-style:italic; padding:4px 0;">No queued videos. Send one from your phone!</div>';
+        const empty = document.createElement("div");
+        empty.style.cssText = "color:#a09bb8; font-size:11px; font-style:italic; padding:4px 0;";
+        empty.textContent = "No queued videos. Send one from your phone!";
+        inpageQueueItems.appendChild(empty);
       } else {
-        inpageQueueItems.innerHTML = items.map((it, idx) => `
-          <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06);">
-            <span style="font-size:11px; font-weight:bold; color:#00e5ff; margin-right:6px;">${idx + 1}.</span>
-            <span style="font-size:11px; color:#fff; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${it.title || it.videoId}</span>
-            <button type="button" class="btn-inpage-play-now" data-vid="${it.videoId}" data-id="${it.id}" style="background:none; border:none; color:#00ffaa; font-size:11px; font-weight:bold; cursor:pointer; padding:2px 6px;">▶ Play</button>
-            <button type="button" class="btn-inpage-del-item" data-id="${it.id}" style="background:none; border:none; color:#ff4444; font-size:11px; cursor:pointer; padding:2px 4px;">✕</button>
-          </div>
-        `).join("");
+        items.forEach((it, idx) => {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06);";
+
+          const idxSpan = document.createElement("span");
+          idxSpan.style.cssText = "font-size:11px; font-weight:bold; color:#00e5ff; margin-right:6px;";
+          idxSpan.textContent = `${idx + 1}.`;
+
+          const titleSpan = document.createElement("span");
+          titleSpan.style.cssText = "font-size:11px; color:#fff; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+          titleSpan.textContent = it.title || it.videoId;
+
+          const playBtn = document.createElement("button");
+          playBtn.type = "button";
+          playBtn.className = "btn-inpage-play-now";
+          playBtn.dataset.vid = it.videoId;
+          playBtn.dataset.id = it.id;
+          playBtn.style.cssText = "background:none; border:none; color:#00ffaa; font-size:11px; font-weight:bold; cursor:pointer; padding:2px 6px;";
+          playBtn.textContent = "▶ Play";
+
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "btn-inpage-del-item";
+          delBtn.dataset.id = it.id;
+          delBtn.style.cssText = "background:none; border:none; color:#ff4444; font-size:11px; cursor:pointer; padding:2px 4px;";
+          delBtn.textContent = "✕";
+
+          row.append(idxSpan, titleSpan, playBtn, delBtn);
+          inpageQueueItems.appendChild(row);
+        });
 
         inpageQueueItems.querySelectorAll(".btn-inpage-play-now").forEach(btn => {
           btn.onclick = () => {

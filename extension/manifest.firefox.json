@@ -44,6 +44,7 @@
       ],
       "js": [
         "content/qrcode.min.js",
+        "content/paho-mqtt-min.js",
         "content/peerjs.min.js",
         "content/content.js"
       ],
