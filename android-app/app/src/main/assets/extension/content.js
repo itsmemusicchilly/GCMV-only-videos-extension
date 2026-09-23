@@ -3555,7 +3555,7 @@
     return { videoId, title, channel, thumbnail };
   }
 
-  const GACHA_SEARCH_TAG_BLOCK = '"GLMV|GL2MV|GCMV|MEP"';
+  const GACHA_SEARCH_TAG_BLOCK = '"GCMV|GLMV|GL2MV|MEP"';
 
   function formatGachaSearchQuery(rawQuery) {
     if (!settings.enabled || !settings.autoplayGuard) {
@@ -3569,7 +3569,7 @@
     if (!q) return rawQuery;
 
     // If query already has the exact tag block, don't duplicate it
-    if (q.includes("GLMV|GL2MV|GCMV|MEP") || q.includes("GLMV|GCMV|GL2MV|MEP")) {
+    if (q.includes("GCMV|GLMV|GL2MV|MEP") || q.includes("GLMV|GL2MV|GCMV|MEP") || q.includes("GLMV|GCMV|GL2MV|MEP")) {
       return q;
     }
 
@@ -3610,7 +3610,7 @@
     const query = urlParams.get("search_query");
     if (!query) return;
 
-    if (query.includes("GLMV|GL2MV|GCMV|MEP") || query.includes("GLMV|GCMV|GL2MV|MEP")) {
+    if (query.includes("GCMV|GLMV|GL2MV|MEP") || query.includes("GLMV|GL2MV|GCMV|MEP") || query.includes("GLMV|GCMV|GL2MV|MEP")) {
       updateSearchBoxDisplay(query);
       lastGuardedResultsHref = window.location.href;
       return;

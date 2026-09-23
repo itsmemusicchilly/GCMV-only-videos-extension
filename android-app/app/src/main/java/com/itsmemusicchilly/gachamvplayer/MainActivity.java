@@ -1207,7 +1207,7 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    public static final String GACHA_SEARCH_TAG_BLOCK = "\"GLMV|GL2MV|GCMV|MEP\"";
+    public static final String GACHA_SEARCH_TAG_BLOCK = "\"GCMV|GLMV|GL2MV|MEP\"";
 
     public static String formatGachaSearchQuery(Context context, String rawQuery) {
         if (rawQuery == null) return "";
@@ -1223,7 +1223,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        if (q.contains("GLMV|GL2MV|GCMV|MEP") || q.contains("GLMV|GCMV|GL2MV|MEP")) {
+        if (q.contains("GCMV|GLMV|GL2MV|MEP") || q.contains("GLMV|GL2MV|GCMV|MEP") || q.contains("GLMV|GCMV|GL2MV|MEP")) {
             return q;
         }
 
@@ -1398,7 +1398,7 @@ public class MainActivity extends AppCompatActivity {
                         if (query == null) query = uri.getQueryParameter("q");
                         if (query == null) query = uri.getQueryParameter("search");
                         if (query != null && !query.trim().isEmpty() &&
-                            !query.contains("GLMV|GL2MV|GCMV|MEP") && !query.contains("GLMV|GCMV|GL2MV|MEP")) {
+                            !query.contains("GCMV|GLMV|GL2MV|MEP") && !query.contains("GLMV|GL2MV|GCMV|MEP") && !query.contains("GLMV|GCMV|GL2MV|MEP")) {
                             String formatted = formatGachaSearchQuery(MainActivity.this, query);
                             if (!formatted.equals(query)) {
                                 Uri.Builder builder = uri.buildUpon().clearQuery();
@@ -1885,7 +1885,7 @@ public class MainActivity extends AppCompatActivity {
                 publishNativeState();
                 break;
             case "search":
-                final String query = cmd.optString("query", "");
+                final String query = formatGachaSearchQuery(this, cmd.optString("query", ""));
                 cloudWork.execute(() -> publishSearchResults(query));
                 break;
             default:
