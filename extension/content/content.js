@@ -3166,7 +3166,7 @@
 
     // 4. Check for queued video from Desktop Remote Server / NAS
     if (!window.AndroidBridge && (settings.remoteServerEnabled !== false || settings.useNasServer)) {
-      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
       try {
         const res = await fetch(serverUrl + "/api/queue?pop=true", { cache: "no-store" });
         if (res.ok) {
@@ -3880,7 +3880,7 @@
 
     // PIN Validation
     const pinRequired = Boolean(settings.remotePinEnabled);
-    const configuredPin = (settings.remotePin || "1234").trim();
+    const configuredPin = String(settings.remotePin || "1234").trim();
     if (pinRequired && data.action !== "get_state") {
       const clientPin = (data.pin != null ? String(data.pin) : "").trim();
       if (clientPin !== configuredPin) {
@@ -4264,7 +4264,7 @@
         window.AndroidBridge.updateCurrentPlayback(videoId, title, isPlaying, volume);
       } catch (e) {}
     } else {
-      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
       fetch(serverUrl + "/api/playback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -4289,7 +4289,7 @@
 
     remotePollInterval = setInterval(async () => {
       if (!settings.enabled || settings.remoteServerEnabled === false) return;
-      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
       try {
         const res = await fetch(serverUrl + "/api/control/poll", { cache: "no-store" });
         if (!res.ok) return;
@@ -6358,7 +6358,7 @@
           items = [...items, ...bridgeItems];
         } catch (e) {}
       } else {
-        const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+        const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
         try {
           const res = await fetch(serverUrl + "/api/queue", { cache: "no-store" });
           if (res.ok) {
@@ -6409,7 +6409,7 @@
             if (window.AndroidBridge && typeof window.AndroidBridge.removeQueueItem === "function") {
               window.AndroidBridge.removeQueueItem(qId);
             } else {
-              const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+              const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
               await fetch(serverUrl + "/api/queue?id=" + encodeURIComponent(qId), { method: "DELETE" }).catch(() => {});
             }
             refreshInpageQueue();
@@ -6426,7 +6426,7 @@
         if (window.AndroidBridge && typeof window.AndroidBridge.clearQueue === "function") {
           window.AndroidBridge.clearQueue();
         } else {
-          const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+          const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
           await fetch(serverUrl + "/api/queue", { method: "DELETE" }).catch(() => {});
         }
         refreshInpageQueue();
@@ -7757,7 +7757,7 @@
 
     // 2. Check for queued video from Desktop Remote Server
     if (!window.AndroidBridge && (settings.remoteServerEnabled !== false || settings.useNasServer)) {
-      const serverUrl = (settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
+      const serverUrl = String(settings.remoteServerUrl || settings.nasServerUrl || "http://127.0.0.1:3000").trim().replace(/\/+$/, "");
       try {
         const res = await fetch(serverUrl + "/api/queue?pop=true", { cache: "no-store" });
         if (res.ok) {

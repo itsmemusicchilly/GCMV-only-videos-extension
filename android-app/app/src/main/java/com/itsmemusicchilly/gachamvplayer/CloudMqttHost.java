@@ -33,6 +33,9 @@ import javax.net.ssl.SSLSocketFactory;
 public class CloudMqttHost {
 
     private static final String TAG = "GCMV_CloudMqtt";
+    // Mobile carrier NAT tables often expire an idle TCP mapping well under 20s,
+    // silently dropping the connection before our old 20s idle-ping ever fired.
+    private static final int IDLE_PING_MS = 8000;
     private static final Broker[] BROKERS = new Broker[] {
             new Broker("EMQX", "broker.emqx.io", 8084, "/mqtt"),
             new Broker("HiveMQ", "broker.hivemq.com", 8884, "/mqtt")
@@ -77,6 +80,7 @@ public class CloudMqttHost {
     private final CopyOnWriteArrayList<Link> links = new CopyOnWriteArrayList<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final SecureRandom random = new SecureRandom();
+    private final ExecutorService dnsExecutor = Executors.newCachedThreadPool();
     private volatile int session = 0;
     private volatile String roomCode = "";
     private volatile String cmdTopic = "";
@@ -121,6 +125,7 @@ public class CloudMqttHost {
             closeLink(link);
         }
         links.clear();
+        dnsExecutor.shutdownNow();
     }
 
     public boolean isRunning() {
@@ -137,6 +142,7 @@ public class CloudMqttHost {
     }
 
     private void runBroker(Broker broker, int gen) {
+        long backoffMs = 2000;
         while (running.get() && gen == session) {
             Link link = null;
             try {
@@ -149,12 +155,13 @@ public class CloudMqttHost {
                     throw new Exception(broker.name + " rejected CONNECT");
                 }
                 writeLink(link, encodeSubscribe(cmdTopic));
-                Log.i(TAG, "Cloud room " + roomCode + " online via " + broker.name);
+                Log.i(TAG, "Cloud room " + roomCode + " online via " + broker.name + ", subscribed to " + cmdTopic);
+                backoffMs = 2000;
                 String retained = retainedState;
                 if (retained != null) {
                     writeLink(link, encodePublish(stateTopic, retained.getBytes(StandardCharsets.UTF_8), true));
                 }
-                link.socket.setSoTimeout(20000);
+                link.socket.setSoTimeout(IDLE_PING_MS);
                 readLoop(link);
             } catch (Exception e) {
                 Log.w(TAG, broker.name + " cloud link dropped: " + e.getMessage());
@@ -164,7 +171,10 @@ public class CloudMqttHost {
                     closeLink(link);
                 }
             }
-            if (running.get() && gen == session) sleepQuiet(2000);
+            if (running.get() && gen == session) {
+                sleepQuiet(backoffMs);
+                backoffMs = Math.min(backoffMs * 2, 60000);
+            }
         }
     }
 
@@ -205,12 +215,7 @@ public class CloudMqttHost {
     }
 
     private InetAddress resolve(String host, int timeoutMs) throws Exception {
-        ExecutorService lookup = Executors.newSingleThreadExecutor();
-        try {
-            return lookup.submit(() -> InetAddress.getByName(host)).get(timeoutMs, TimeUnit.MILLISECONDS);
-        } finally {
-            lookup.shutdownNow();
-        }
+        return dnsExecutor.submit(() -> InetAddress.getByName(host)).get(timeoutMs, TimeUnit.MILLISECONDS);
     }
 
     private String readHttpHeaders(InputStream in) throws Exception {
@@ -287,7 +292,7 @@ public class CloudMqttHost {
             } catch (java.net.SocketTimeoutException stalled) {
                 throw new Exception("websocket frame stalled");
             } finally {
-                try { link.socket.setSoTimeout(20000); } catch (Exception ignored) {}
+                try { link.socket.setSoTimeout(IDLE_PING_MS); } catch (Exception ignored) {}
             }
             if (b1 < 0) return null;
             int opcode = b0 & 0x0F;
@@ -359,6 +364,7 @@ public class CloudMqttHost {
 
     private void handlePacket(byte[] buf, int off, int header, int remaining) {
         int type = buf[off] & 0xF0;
+        Log.d(TAG, "packet type=0x" + Integer.toHexString(type) + " remaining=" + remaining);
         if (type != 0x30) return;
         int pos = off + header;
         int end = pos + remaining;
@@ -371,6 +377,7 @@ public class CloudMqttHost {
         int qos = (buf[off] >> 1) & 0x03;
         if (qos > 0) pos += 2;
         if (pos > end) return;
+        Log.d(TAG, "PUBLISH on topic=" + topic + " expecting cmdTopic=" + cmdTopic);
         if (!topic.equals(cmdTopic)) return;
         String body = new String(buf, pos, end - pos, StandardCharsets.UTF_8);
         try {
