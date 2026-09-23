@@ -3452,7 +3452,7 @@
     return res;
   }
 
-  function getPlaybackStateObject() {
+  function getPlaybackStateObject(ackId) {
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     const videoId = getCurrentVideoId();
     const titleEl = document.querySelector("h1.title, h1.ytm-watch-video-title, #title h1, .slim-video-information-title, yt-formatted-string.ytd-watch-metadata");
@@ -3474,7 +3474,8 @@
       loopMode: currentLoopMode,
       queue: cloudRemoteQueue,
       roomCode: cloudRoomCode,
-      pinRequired: Boolean(settings.remotePinEnabled)
+      pinRequired: Boolean(settings.remotePinEnabled),
+      ackId: ackId || null
     };
   }
 
@@ -3515,8 +3516,8 @@
     }
   }
 
-  function broadcastCloudState() {
-    const state = getPlaybackStateObject();
+  function broadcastCloudState(ackId) {
+    const state = getPlaybackStateObject(ackId);
     if (cloudConnections.length > 0) {
       cloudConnections.forEach(conn => {
         if (conn && conn.open) {
@@ -4050,6 +4051,11 @@
         }
         break;
     }
+
+    // Let the remote know this specific command was processed, so it can
+    // stop retrying instead of resending into a connection that already
+    // handled it.
+    broadcastCloudState(data.cmdId);
   }
 
   window.__gachaHandleRemoteCommand = function(raw) {

@@ -222,16 +222,16 @@
       }
     }
 
-    function sendCommand(cmd) {
+    // Commands can land in a gap where the player's connection to the broker
+    // has dropped and not yet reconnected. Track each command until the
+    // player echoes its cmdId back in a STATE update, and resend it a few
+    // times if that ack never shows up.
+    let pendingCommands = {};
+    const CMD_RETRY_MS = 3500;
+    const CMD_MAX_ATTEMPTS = 3;
+
+    function transmitCommand(cmd) {
       let sent = false;
-      if (cmd) {
-        if (!cmd.cmdId) {
-          cmd.cmdId = "c_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
-        }
-        if (currentPin) {
-          cmd.pin = currentPin;
-        }
-      }
 
       // 1. Send via MQTT WebSocket
       if (mqttClient && mqttClient.isConnected()) {
@@ -252,6 +252,52 @@
           peerConn.send(cmd);
           sent = true;
         } catch (_) {}
+      }
+
+      return sent;
+    }
+
+    function scheduleCommandRetry(cmd) {
+      const entry = pendingCommands[cmd.cmdId];
+      if (!entry) return;
+      entry.timer = setTimeout(() => {
+        const pending = pendingCommands[cmd.cmdId];
+        if (!pending) return; // already acknowledged
+        if (pending.attempts >= CMD_MAX_ATTEMPTS) {
+          delete pendingCommands[cmd.cmdId];
+          showToast("⚠️ Player isn't responding — check its connection");
+          return;
+        }
+        pending.attempts++;
+        console.warn(`[GCMV Remote] No ack for ${cmd.action}, retrying (attempt ${pending.attempts})`);
+        transmitCommand(cmd);
+        scheduleCommandRetry(cmd);
+      }, CMD_RETRY_MS);
+    }
+
+    function ackCommand(ackId) {
+      if (!ackId) return;
+      const pending = pendingCommands[ackId];
+      if (pending) {
+        if (pending.timer) clearTimeout(pending.timer);
+        delete pendingCommands[ackId];
+      }
+    }
+
+    function sendCommand(cmd) {
+      if (!cmd) return;
+      if (!cmd.cmdId) {
+        cmd.cmdId = "c_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+      }
+      if (currentPin) {
+        cmd.pin = currentPin;
+      }
+
+      const sent = transmitCommand(cmd);
+
+      if (!pendingCommands[cmd.cmdId]) {
+        pendingCommands[cmd.cmdId] = { attempts: 0, timer: null };
+        scheduleCommandRetry(cmd);
       }
 
       if (!sent && !isConnected) {
@@ -401,6 +447,7 @@
       if (!data) return;
 
       if (data.type === "STATE") {
+        ackCommand(data.ackId);
         if (data.pinRequired) {
           hostRequiresPin = true;
           if (!pinAuthenticated && !currentPin) {
