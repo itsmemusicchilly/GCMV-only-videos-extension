@@ -263,7 +263,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const qr = qrcode(0, "M");
         qr.addData(url);
         qr.make();
-        popupCloudQrBox.innerHTML = qr.createSvgTag({ scalable: true });
+        const svgDoc = new DOMParser().parseFromString(qr.createSvgTag({ scalable: true }), "image/svg+xml");
+        popupCloudQrBox.replaceChildren(svgDoc.documentElement);
         if (popupCloudQrContainer) popupCloudQrContainer.classList.remove("hidden");
       }
     } catch (e) {
@@ -299,7 +300,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const qr = qrcode(0, "M");
         qr.addData(url);
         qr.make();
-        popupRemoteQrBox.innerHTML = qr.createSvgTag({ scalable: true });
+        const svgDoc = new DOMParser().parseFromString(qr.createSvgTag({ scalable: true }), "image/svg+xml");
+        popupRemoteQrBox.replaceChildren(svgDoc.documentElement);
         if (popupRemoteQrContainer) popupRemoteQrContainer.classList.remove("hidden");
       }
     } catch (e) {
@@ -363,7 +365,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const chipsContainer = document.getElementById("popupRemoteIpChips");
       if (chipsContainer) {
-        chipsContainer.innerHTML = "";
+        chipsContainer.replaceChildren();
         if (addresses.length > 1) {
           chipsContainer.style.display = "flex";
           addresses.forEach((info) => {
