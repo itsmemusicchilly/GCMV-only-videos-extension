@@ -228,7 +228,7 @@
     // times if that ack never shows up.
     let pendingCommands = {};
     const CMD_RETRY_MS = 3500;
-    const CMD_MAX_ATTEMPTS = 3;
+    const CMD_MAX_ATTEMPTS = 6;
 
     function transmitCommand(cmd) {
       let sent = false;
