@@ -15,6 +15,8 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 
 # Copy strictly required runtime files
 cp background.js "$STAGING_DIR/"
+cp chrome_polyfill.js "$STAGING_DIR/"
+cp paho-mqtt-min.js "$STAGING_DIR/"
 cp -r icons "$STAGING_DIR/"
 cp -r content "$STAGING_DIR/"
 cp -r popup "$STAGING_DIR/"
