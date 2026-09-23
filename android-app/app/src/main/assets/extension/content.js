@@ -2927,7 +2927,7 @@
     if (!btn) return;
     const video = document.querySelector("video.html5-main-video") || document.querySelector("video");
     const isPlaying = video && !video.paused && !video.ended;
-    btn.innerHTML = isPlaying ? "⏸️ Pause" : "▶️ Play";
+    btn.textContent = isPlaying ? "⏸️ Pause" : "▶️ Play";
   }
 
   function togglePlayPause() {
@@ -6515,7 +6515,7 @@
 
         const chipsContainer = widget.querySelector("#inpageRemoteIpChips");
         if (chipsContainer) {
-          chipsContainer.innerHTML = "";
+          chipsContainer.replaceChildren();
           if (cloudRoomCode) {
             const roomBtn = document.createElement("button");
             roomBtn.type = "button";
