@@ -173,7 +173,7 @@ public class CloudMqttHost {
             }
             if (running.get() && gen == session) {
                 sleepQuiet(backoffMs);
-                backoffMs = Math.min(backoffMs * 2, 60000);
+                backoffMs = Math.min(backoffMs * 2, 15000);
             }
         }
     }
