@@ -4355,6 +4355,9 @@
   let stallDetectionCounter = 0;
   let lastNudgeTimestamp = 0;
   let consecutiveNudges = 0;
+  let zeroBufferStallCounter = 0;
+  let lastZeroBufferNudgeTimestamp = 0;
+  let consecutiveZeroBufferNudges = 0;
 
   function initBufferStallWatchdog(video) {
     if (bufferWatchdogInterval) {
@@ -4365,6 +4368,8 @@
 
     lastObservedCurrentTime = -1;
     stallDetectionCounter = 0;
+    zeroBufferStallCounter = 0;
+    consecutiveZeroBufferNudges = 0;
 
     bufferWatchdogInterval = setInterval(() => {
       if (!settings.enabled || settings.smoothPlayback === false) return;
@@ -4399,6 +4404,7 @@
         // If buffered ahead by at least 0.5s, data is in memory but decode/playback clock stalled!
         if (bufferedAhead >= 0.5) {
           stallDetectionCounter++;
+          zeroBufferStallCounter = 0;
           // Stalled for ~500ms (2 consecutive intervals)
           if (stallDetectionCounter >= 2) {
             const now = Date.now();
@@ -4419,7 +4425,51 @@
             }
           }
         } else {
+          // Nothing buffered ahead at all: this isn't a decode-clock stall, it's a genuinely
+          // wedged load (e.g. loadVideoById left the player with no data in flight, which
+          // shows up as the video spinning on "loading" forever). Manually seeking is what
+          // fixes this by hand, so replicate that automatically once it's been stuck a while.
           stallDetectionCounter = 0;
+          zeroBufferStallCounter++;
+          // ~4s of zero progress and zero buffer growth
+          if (zeroBufferStallCounter >= 16) {
+            zeroBufferStallCounter = 0;
+            const now = Date.now();
+            if (now - lastZeroBufferNudgeTimestamp > 5000) {
+              consecutiveZeroBufferNudges = 0;
+            }
+            lastZeroBufferNudgeTimestamp = now;
+            const moviePlayerEl = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+            if (consecutiveZeroBufferNudges < 3) {
+              consecutiveZeroBufferNudges++;
+              console.log(`[GCMV] Auto-unfreeze: stuck loading at ${curTime.toFixed(2)}s with no buffer, forcing seek nudge (attempt ${consecutiveZeroBufferNudges})`);
+              try {
+                const seekTarget = Math.max(0, curTime + 0.15);
+                if (moviePlayerEl && typeof moviePlayerEl.seekTo === "function") {
+                  moviePlayerEl.seekTo(seekTarget, true);
+                } else {
+                  video.currentTime = seekTarget;
+                }
+                video.play().catch(() => {});
+              } catch (_) {}
+            } else {
+              // Seek nudges alone haven't worked after 3 tries (~20s stuck total): fall back
+              // to a full reload of the same video, mirroring what a manual page refresh does.
+              consecutiveZeroBufferNudges = 0;
+              const vid = getCurrentVideoId();
+              if (vid) {
+                console.log(`[GCMV] Auto-unfreeze: seek nudges exhausted, reloading video ${vid}`);
+                try {
+                  if (moviePlayerEl && typeof moviePlayerEl.loadVideoById === "function") {
+                    moviePlayerEl.loadVideoById(vid, curTime);
+                    if (typeof moviePlayerEl.playVideo === "function") moviePlayerEl.playVideo();
+                  } else {
+                    dispatchMainWorldPlayerAction("loadVideoById", vid);
+                  }
+                } catch (_) {}
+              }
+            }
+          }
         }
       } else {
         stallDetectionCounter = 0;
