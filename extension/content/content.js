@@ -5574,7 +5574,7 @@
   // Feed & Sidebar Highlights, Dims & "It's Gacha!" Button (Solution 1 & 3)
   // ==========================================================
   function applyFeedBadgesAndFilters(forceAll = false) {
-    if (!settings.enabled || !settings.filterOfficialVideos) return;
+    if (!settings.enabled || !settings.autoplayGuard || !settings.filterOfficialVideos) return;
 
     if (forceAll) {
       document.querySelectorAll("[data-gacha-checked]").forEach((el) => {
@@ -8073,6 +8073,13 @@
         }
         if (changes.autoUnmute !== undefined && changes.autoUnmute.newValue) {
           attemptAutoUnmute("storage-enabled");
+        }
+        if (changes.autoplayGuard !== undefined) {
+          if (!changes.autoplayGuard.newValue) {
+            cleanFeedBadges();
+          } else if (typeof applyFeedBadgesAndFilters === "function") {
+            applyFeedBadgesAndFilters(true);
+          }
         }
         if (changes.volumeBoost !== undefined) {
           settings.volumeBoost = changes.volumeBoost.newValue;
